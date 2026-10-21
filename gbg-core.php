@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.12
+ * Version: 0.3.13
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.12';
+const GBG_CORE_VERSION = '0.3.13';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1376,6 +1376,23 @@ function gbg_core_share_bar( int $post_id ): string {
 		. implode( '', $items ) . '<span class="gbg-share-thanks" role="status" aria-live="polite"></span></div>';
 }
 
+/** End offset of the hero section (id="intro", else the first section), matching nested sections; -1 when none. */
+function gbg_core_hero_end( string $html ): int {
+	$start = preg_match( '~<section\b[^>]*\bid="intro"~i', $html, $m, PREG_OFFSET_CAPTURE ) ? $m[0][1] : stripos( $html, '<section' );
+	if ( false === $start ) {
+		return -1;
+	}
+	preg_match_all( '~<section\b|</section>~i', $html, $tags, PREG_OFFSET_CAPTURE, (int) $start );
+	$depth = 0;
+	foreach ( $tags[0] as $t ) {
+		$depth += '<' === $t[0][0] && '/' !== $t[0][1] ? 1 : -1;
+		if ( 0 === $depth ) {
+			return $t[1] + strlen( $t[0] );
+		}
+	}
+	return -1;
+}
+
 /** Insert the bar after the first real paragraph (the direct answer stays first); fall back to the bottom. */
 function gbg_core_share_insert( string $content, string $bar, string $position ): string {
 	if ( 'bottom' === $position ) {
@@ -1411,9 +1428,10 @@ add_filter(
 		$bar = gbg_core_share_bar( $post_id );
 		// Pages built with sections (eSIM, flight compensation, car rental, hubs): right under the first section (the
 		// hero with the answer and the main button), inside the theme's content width.
-		if ( 'page' === get_post_type( $post_id ) && preg_match( '~</section>~i', $content, $m, PREG_OFFSET_CAPTURE ) ) {
+		$end = 'page' === get_post_type( $post_id ) ? gbg_core_hero_end( $content ) : -1;
+		if ( $end > 0 ) {
 			$wrap = '<section class="l-section wpb_row height_auto gbg-share-section" style="padding-top:0;padding-bottom:0"><div class="l-section-h i-cf">' . $bar . '</div></section>';
-			return substr_replace( $content, '</section>' . $wrap, $m[0][1], 10 );
+			return substr( $content, 0, $end ) . $wrap . substr( $content, $end );
 		}
 		return gbg_core_share_insert( $content, $bar, (string) $s['share_position'] );
 	},
