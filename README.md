@@ -32,6 +32,8 @@ Noindex payload from an approved prune list: `scripts/build_noindex_payload.py <
 
 New versions are published in the public repo github.com/prnl85/gbg-core (`update.json` with `version` + `package` = archive of branch `release-<version>`). WordPress shows them under Dashboard → Updates (Update URI header); the archive folder is renamed to `gbg-core/` on install. Staging (cloudwaysapps.com) auto-updates; live needs one click by an administrator.
 
+Release: `scripts/release_gbg_core.sh` (branch `release-<version>` first, then `update.json` on main). 0.3.2 (21-10) was the first end-to-end test of the channel: no functional change.
+
 ## Health and hardening (0.1.9)
 
 `GET /wp-json/gbg/v1/health` (settings logins only): WordPress/PHP version, pending core and plugin updates, plugins with versions, DISALLOW_FILE_EDIT, debug display, number of administrators, XML-RPC. Read by `scripts/security_audit.py`.
