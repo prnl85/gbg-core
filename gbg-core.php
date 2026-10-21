@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.8
+ * Version: 0.3.9
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.8';
+const GBG_CORE_VERSION = '0.3.9';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1368,12 +1368,23 @@ function gbg_core_share_bar( int $post_id ): string {
 		. implode( '', $items ) . '<span class="gbg-share-thanks" role="status" aria-live="polite"></span></div>';
 }
 
-/** Insert the bar after the first real paragraph (the direct answer stays first); fall back to the top. */
+/** Insert the bar after the first real paragraph (the direct answer stays first); fall back to the bottom. */
 function gbg_core_share_insert( string $content, string $bar, string $position ): string {
 	if ( 'bottom' === $position ) {
 		return $content . $bar;
 	}
-	$top = preg_match( '~</p>~i', $content, $m, PREG_OFFSET_CAPTURE ) ? substr_replace( $content, '</p>' . $bar, $m[0][1], 4 ) : $bar . $content;
+	// The first paragraph with at least 20 words: skips subtitles and short intro lines in page-builder headers.
+	// None found: under the article, never inside a header block.
+	$top = $content . $bar;
+	if ( preg_match_all( '~<p[\s>].*?</p>~is', $content, $all, PREG_OFFSET_CAPTURE ) ) {
+		foreach ( $all[0] as $p ) {
+			if ( str_word_count( wp_strip_all_tags( $p[0] ) ) >= 20 ) {
+				$end = $p[1] + strlen( $p[0] );
+				$top = substr( $content, 0, $end ) . $bar . substr( $content, $end );
+				break;
+			}
+		}
+	}
 	return 'both' === $position ? $top . $bar : $top;
 }
 
