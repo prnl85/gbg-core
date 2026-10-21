@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.14
+ * Version: 0.3.15
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.14';
+const GBG_CORE_VERSION = '0.3.15';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1507,6 +1507,13 @@ add_action(
 		}
 		wp_enqueue_style( 'gbg-magnific-popup', get_template_directory_uri() . $file, array(), (string) wp_get_theme( 'Impreza' )->get( 'Version' ) );
 		wp_add_inline_style( 'gbg-magnific-popup', '.mfp-bg{z-index:1000000!important;background:#0b0b0b}.mfp-bg.mfp-ready{opacity:.94!important}.mfp-wrap{z-index:1000001!important}.mfp-title{font-size:15px;line-height:1.4;padding-right:60px}.mfp-counter{font-size:13px}' );
+		// Swipe on touch screens (Magnific has none): left/right = next/previous photo, down = close.
+		wp_add_inline_script(
+			'us-magnific-popup',
+			'(function(){var x0=null,y0=null;document.addEventListener("touchstart",function(e){if(!e.target.closest||!e.target.closest(".mfp-wrap"))return;x0=e.touches[0].clientX;y0=e.touches[0].clientY},{passive:true});'
+			. 'document.addEventListener("touchend",function(e){if(x0===null)return;var dx=e.changedTouches[0].clientX-x0,dy=e.changedTouches[0].clientY-y0;x0=null;var m=window.jQuery&&jQuery.magnificPopup&&jQuery.magnificPopup.instance;if(!m||!m.isOpen)return;'
+			. 'if(Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)*1.5){dx<0?m.next():m.prev()}else if(dy>90&&Math.abs(dy)>Math.abs(dx)*1.5){m.close()}},{passive:true})})();'
+		);
 	},
 	20
 );
