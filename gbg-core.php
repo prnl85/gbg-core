@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.29
+ * Version: 0.3.30
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.29';
+const GBG_CORE_VERSION = '0.3.30';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1728,13 +1728,19 @@ function gbg_core_go_country_links( string $html, string $country, int $post_id,
 	return (string) preg_replace( $rx, 'href="$1?c=' . $country . '&amp;s=p' . $post_id . '"', $html );
 }
 
+// Generated pages that still carry the template placeholder host (https://yourwebsite.com/go/...) point to our own /go/.
+function gbg_core_fix_placeholder_go( string $html ): string {
+	return str_replace( array( 'https://yourwebsite.com/go/', 'http://yourwebsite.com/go/' ), home_url( '/go/' ), $html );
+}
+
 add_filter(
 	'the_content',
 	static function ( $content ) {
 		$s = gbg_core_settings();
-		if ( ! $s['go_pages'] || ! is_string( $content ) || is_admin() || is_feed() || ! is_singular() ) {
+		if ( ! $s['go_links'] || ! is_string( $content ) || is_admin() || is_feed() || ! is_singular() ) {
 			return $content;
 		}
+		$content = gbg_core_fix_placeholder_go( $content );
 		$post_id = (int) get_the_ID();
 		$country = $s['go_pages'][ (string) get_post_field( 'post_name', $post_id ) ] ?? '';
 		return $country ? gbg_core_go_country_links( $content, $country, $post_id, array_keys( (array) $s['go_country'] ) ) : $content;
