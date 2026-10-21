@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.2
+ * Version: 0.3.3
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.2';
+const GBG_CORE_VERSION = '0.3.3';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -61,6 +61,10 @@ function gbg_core_defaults(): array {
 		'growth_rules'       => array(),
 		'consent_version'    => 'v1',
 		'privacy_url'        => '',
+		// Pinterest save buttons for readers: a 'Save' button on article images (desktop hover) and a 'Save this guide
+		// on Pinterest' link under the article. Plain share links, no Pinterest script, no cookies until someone clicks.
+		'pin_enabled'        => false,
+		'pin_min_width'      => 300,
 	);
 }
 
@@ -75,7 +79,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -95,6 +99,9 @@ function gbg_core_sanitize( array $input ): array {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = sanitize_text_field( (string) $input[ $key ] );
 		}
+	}
+	if ( array_key_exists( 'pin_min_width', $input ) ) {
+		$clean['pin_min_width'] = max( 100, min( 2000, absint( $input['pin_min_width'] ) ) );
 	}
 	if ( array_key_exists( 'disclosure_url', $input ) ) {
 		$clean['disclosure_url'] = esc_url_raw( (string) $input['disclosure_url'] );
@@ -399,6 +406,8 @@ function gbg_core_update_item( array $remote ): ?object {
 		'new_version' => $remote['version'],
 		'package'     => $remote['package'],
 		'url'         => 'https://github.com/prnl85/gbg-core',
+		'tested'      => (string) ( $remote['tested'] ?? '' ), // WordPress version the release was checked on (staging)
+		'requires_php' => (string) ( $remote['requires_php'] ?? '' ),
 	);
 }
 
@@ -1245,5 +1254,75 @@ add_action(
 			fputcsv( $out, array_values( $r ) );
 		}
 		exit;
+	}
+);
+
+/* -------------------------------------------------------------------------
+ * Pinterest: let readers save articles and images to their own boards (Paul 21-10). Plain links to Pinterest's share
+ * page (pin/create/button), so no third-party script, no cookies and no speed cost until a reader clicks. The pin image
+ * is the post meta _gbg_pin_image (a designed 2:3 pin) if set, else the featured image; image buttons use the image
+ * itself. Images with data-pin-nopin or narrower than pin_min_width get no button. Off until pin_enabled.
+ * ---------------------------------------------------------------------- */
+
+/** Pinterest share URL for a page, an image and a description. */
+function gbg_core_pin_url( string $url, string $media, string $description ): string {
+	return 'https://www.pinterest.com/pin/create/button/?url=' . rawurlencode( $url ) . '&media=' . rawurlencode( $media )
+		. '&description=' . rawurlencode( wp_strip_all_tags( $description ) );
+}
+
+/** 'Save this guide on Pinterest' link under the article (real anchor text, opens Pinterest in a new tab). */
+function gbg_core_pin_row( int $post_id ): string {
+	$media = (string) get_post_meta( $post_id, '_gbg_pin_image', true );
+	if ( '' === $media ) {
+		$media = (string) get_the_post_thumbnail_url( $post_id, 'full' );
+	}
+	if ( '' === $media ) {
+		return '';
+	}
+	$href = gbg_core_pin_url( (string) get_permalink( $post_id ), $media, (string) get_the_title( $post_id ) );
+	return '<p class="gbg-pin-row"><a class="gbg-pin-save" href="' . esc_url( $href ) . '" target="_blank" rel="noopener nofollow" data-gbg-pin="article">'
+		. '<svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.6 19.3c-.1-.8-.2-2 0-2.9l1.2-5s-.3-.6-.3-1.5c0-1.4.8-2.4 1.8-2.4.9 0 1.3.6 1.3 1.4 0 .9-.5 2.1-.8 3.3-.2 1 .5 1.8 1.5 1.8 1.8 0 3.1-1.9 3.1-4.6 0-2.4-1.7-4.1-4.2-4.1-2.9 0-4.5 2.1-4.5 4.4 0 .9.3 1.8.8 2.3l.1.4-.3 1.2c0 .2-.2.3-.4.2-1.3-.6-2.1-2.5-2.1-4 0-3.3 2.4-6.3 6.9-6.3 3.6 0 6.4 2.6 6.4 6 0 3.6-2.3 6.5-5.4 6.5-1.1 0-2.1-.6-2.4-1.2l-.7 2.5c-.2.9-.9 2.1-1.3 2.8A10 10 0 1 0 12 2z"/></svg>'
+		. 'Save this guide on Pinterest</a></p>';
+}
+
+add_filter(
+	'the_content',
+	static function ( $content ) {
+		$s = gbg_core_settings();
+		if ( ! $s['pin_enabled'] || ! is_string( $content ) || is_admin() || is_feed() || ! is_singular() || is_front_page()
+			|| ( defined( 'REST_REQUEST' ) && REST_REQUEST ) || str_contains( $content, 'class="gbg-pin-row"' ) ) {
+			return $content;
+		}
+		$post_id = (int) get_the_ID();
+		if ( $post_id !== (int) get_queried_object_id() ) {
+			return $content;
+		}
+		return $content . gbg_core_pin_row( $post_id );
+	},
+	30
+);
+
+// Image buttons (desktop, hover): one floating 'Save' button that follows the hovered image in the article.
+add_action(
+	'wp_footer',
+	static function () {
+		$s = gbg_core_settings();
+		if ( ! $s['pin_enabled'] || is_admin() || ! is_singular() || is_front_page() ) {
+			return;
+		}
+		$cfg = wp_json_encode( array( 'min' => (int) $s['pin_min_width'], 'url' => (string) get_permalink( get_queried_object_id() ), 'title' => wp_strip_all_tags( (string) get_the_title( get_queried_object_id() ) ) ) );
+		echo '<style id="gbg-pin-css">.gbg-pin-row{margin:1.5em 0}.gbg-pin-save{display:inline-flex;align-items:center;gap:.45em;padding:.55em 1em;border-radius:24px;background:#e60023;color:#fff!important;font-weight:600;text-decoration:none!important;min-height:44px}'
+			. '.gbg-pin-save:hover{background:#ad081b}.gbg-pin-img{position:absolute;z-index:50;display:none;padding:.4em .9em;border-radius:20px;background:#e60023;color:#fff!important;font:600 14px/1.4 sans-serif;text-decoration:none!important;box-shadow:0 2px 6px rgba(0,0,0,.25)}</style>'
+			. '<script id="gbg-pin-js">(function(c){if(!matchMedia("(hover:hover) and (pointer:fine)").matches)return;'
+			. 'var root=document.querySelector(".post_content")||document.querySelector("main")||document.body,b=document.createElement("a"),cur=null,t;'
+			. 'b.className="gbg-pin-img";b.textContent="Save";b.target="_blank";b.rel="noopener nofollow";b.setAttribute("data-gbg-pin","image");document.body.appendChild(b);'
+			. 'function src(i){var best=i.currentSrc||i.src,w=0;(i.getAttribute("srcset")||"").split(",").forEach(function(p){var x=p.trim().split(/\s+/);var n=parseInt(x[1]);if(n>w){w=n;best=x[0]}});return best}'
+			. 'function show(i){cur=i;var r=i.getBoundingClientRect();b.style.top=(r.top+scrollY+10)+"px";b.style.left=(r.left+scrollX+10)+"px";'
+			. 'b.href="https://www.pinterest.com/pin/create/button/?url="+encodeURIComponent(c.url)+"&media="+encodeURIComponent(i.getAttribute("data-pin-media")||src(i))+"&description="+encodeURIComponent(i.alt||c.title);b.style.display="block"}'
+			. 'root.addEventListener("mouseover",function(e){var i=e.target;if(i.tagName!=="IMG"||i.hasAttribute("data-pin-nopin")||i.getBoundingClientRect().width<c.min)return;clearTimeout(t);show(i)});'
+			. 'root.addEventListener("mouseout",function(e){if(e.target===cur&&e.relatedTarget!==b)t=setTimeout(function(){b.style.display="none"},300)});'
+			. 'b.addEventListener("mouseleave",function(){b.style.display="none"});'
+			. 'document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("[data-gbg-pin]");if(a&&window.gtag)gtag("event","share",{method:"pinterest",content_type:a.getAttribute("data-gbg-pin")})});'
+			. '})(' . $cfg . ');</script>'; // phpcs:ignore WordPress.Security.EscapeOutput
 	}
 );
