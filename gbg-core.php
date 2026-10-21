@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.27
+ * Version: 0.3.28
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.27';
+const GBG_CORE_VERSION = '0.3.28';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1926,4 +1926,41 @@ add_action(
 		echo gbg_core_track_script(); // phpcs:ignore WordPress.Security.EscapeOutput
 	},
 	1
+);
+
+/* -------------------------------------------------------------------------
+ * Landing check (0.3.28): before a generated deep link goes on the site, the server checks that the partner page exists
+ * (affiliate_links.py cannot reach partner sites itself). Settings logins only, only hosts on go_hosts + the merchant
+ * landing hosts below, max 20 URLs per call, one at a time.
+ * ---------------------------------------------------------------------- */
+add_action(
+	'rest_api_init',
+	static function () {
+		register_rest_route(
+			'gbg/v1',
+			'/check-urls',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => 'gbg_core_can_manage',
+				'callback'            => static function ( WP_REST_Request $request ) {
+					$hosts = array_merge( (array) gbg_core_settings()['go_hosts'], array( 'discovercars.com', 'yesim.app', 'ye-sim.app', 'yesim.tech', 'airalo.com', 'airhelp.com' ) );
+					$out   = array();
+					foreach ( array_slice( (array) ( $request->get_json_params()['urls'] ?? array() ), 0, 20 ) as $url ) {
+						$url  = (string) $url;
+						$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+						if ( ! str_starts_with( $url, 'https://' ) || ! gbg_core_host_allowed( preg_replace( '/^www\./', '', $host ), $hosts ) ) {
+							$out[] = array( 'url' => $url, 'status' => 'host not allowed' );
+							continue;
+						}
+						$r     = wp_remote_get( $url, array( 'timeout' => 10, 'redirection' => 5, 'limit_response_size' => 200000, 'user-agent' => 'Mozilla/5.0 (compatible; GoBackpackGo link check)' ) );
+						$body  = is_wp_error( $r ) ? '' : (string) wp_remote_retrieve_body( $r );
+						$title = preg_match( '#<title[^>]*>(.*?)</title>#is', $body, $m ) ? trim( wp_strip_all_tags( $m[1] ) ) : '';
+						$out[] = array( 'url' => $url, 'status' => is_wp_error( $r ) ? $r->get_error_message() : wp_remote_retrieve_response_code( $r ), 'title' => substr( $title, 0, 120 ) );
+						usleep( 400000 );
+					}
+					return array( 'results' => $out );
+				},
+			)
+		);
+	}
 );
