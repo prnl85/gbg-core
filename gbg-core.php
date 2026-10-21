@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.10
+ * Version: 0.3.11
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.10';
+const GBG_CORE_VERSION = '0.3.11';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -68,6 +68,7 @@ function gbg_core_defaults(): array {
 		'share_label'        => 'Smart move: save this guide now, so it is there when you need it on the road.',
 		'pin_enabled'        => false,
 		'pin_min_width'      => 300,
+		'lightbox_fix'       => true,
 	);
 }
 
@@ -82,7 +83,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -1440,4 +1441,31 @@ add_action(
 			. 'b.addEventListener("mouseleave",function(){b.style.display="none"});'
 			. '})(' . $cfg . ');</script>'; // phpcs:ignore WordPress.Security.EscapeOutput
 	}
+);
+
+/* -------------------------------------------------------------------------
+ * Gallery lightbox (Paul 21-10: 'popup is echt belachelijk slecht'): Impreza opens gallery images with Magnific Popup,
+ * but its stylesheet is not in the theme's bundled CSS, so the popup showed a bare image under a grey bar (no dark
+ * backdrop, no arrows, no counter, no caption). Load the theme's own magnific-popup.css on single views that have a
+ * gallery or popup image, and keep the popup above the floating language flag. Setting lightbox_fix (default on).
+ * ---------------------------------------------------------------------- */
+add_action(
+	'wp_enqueue_scripts',
+	static function () {
+		$s = gbg_core_settings();
+		if ( empty( $s['lightbox_fix'] ) || ! is_singular() || 'Impreza' !== get_template() ) {
+			return;
+		}
+		$post = get_post();
+		if ( ! $post || ! preg_match( '~\[gallery|\[us_gallery|action_popup|onclick="popup_image"|link_type="popup_image"~', (string) $post->post_content ) ) {
+			return;
+		}
+		$file = '/common/css/base/magnific-popup.css';
+		if ( ! file_exists( get_template_directory() . $file ) ) {
+			return;
+		}
+		wp_enqueue_style( 'gbg-magnific-popup', get_template_directory_uri() . $file, array(), (string) wp_get_theme( 'Impreza' )->get( 'Version' ) );
+		wp_add_inline_style( 'gbg-magnific-popup', '.mfp-bg{z-index:1000000!important;background:#0b0b0b;opacity:.92}.mfp-wrap{z-index:1000001!important}.mfp-title{font-size:15px;line-height:1.4;padding-right:60px}.mfp-counter{font-size:13px}' );
+	},
+	20
 );
