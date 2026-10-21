@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.23
+ * Version: 0.3.24
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.23';
+const GBG_CORE_VERSION = '0.3.24';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -74,7 +74,7 @@ function gbg_core_defaults(): array {
 		'share_skip_slugs'   => array( 'privacy-policy', 'contact', 'links', 'about-me', 'how-gobackpackgo-makes-money', 'sitemap' ),
 		// Generated affiliate links (scripts/affiliate_links.py): slug => platform URL, served as /go/<slug>/. Empty = Lasso.
 		'go_links'           => array(),
-		'go_hosts'           => array( 'tpx.gr', 'tp.st', 'tpk.lv', 'pxf.io', 'sjv.io', '7eer.net', 'ojrq.net' ),
+		'go_hosts'           => array( 'tpx.gr', 'tp.st', 'tpk.lv', 'pxf.io', 'sjv.io', '7eer.net', 'ojrq.net', 'discovercars.com' ),
 		// Promo codes from the platforms: merchant, code, text, until (Y-m-d), note. Shown by [gbg_promo] until their end date.
 		'promos'             => array(),
 	);
