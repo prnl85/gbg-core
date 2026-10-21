@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.19
+ * Version: 0.3.20
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.19';
+const GBG_CORE_VERSION = '0.3.20';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -408,6 +408,7 @@ add_filter(
  * ---------------------------------------------------------------------- */
 
 const GBG_CORE_UPDATE_JSON = 'https://raw.githubusercontent.com/prnl85/gbg-core/main/update.json';
+const GBG_CORE_UPDATE_API  = 'https://api.github.com/repos/prnl85/gbg-core/contents/update.json?ref=main';
 
 /** Update entry for WordPress when the published version is newer, else null. */
 function gbg_core_update_item( array $remote ): ?object {
@@ -446,7 +447,12 @@ function gbg_core_remote_release(): array {
 	if ( is_array( $cached ) ) {
 		return $cached;
 	}
-	$response = wp_remote_get( GBG_CORE_UPDATE_JSON . '?t=' . time(), array( 'timeout' => 10 ) );
+	// GitHub's API serves the file without the raw CDN cache (raw.githubusercontent.com served an old update.json for
+	// minutes after a release, 21-10). Fall back to the raw URL if the API is unreachable or rate limited.
+	$response = wp_remote_get( GBG_CORE_UPDATE_API, array( 'timeout' => 10, 'headers' => array( 'Accept' => 'application/vnd.github.raw+json', 'User-Agent' => 'gbg-core' ) ) );
+	if ( is_wp_error( $response ) || 200 !== (int) wp_remote_retrieve_response_code( $response ) ) {
+		$response = wp_remote_get( GBG_CORE_UPDATE_JSON . '?t=' . time(), array( 'timeout' => 10 ) );
+	}
 	$code     = is_wp_error( $response ) ? $response->get_error_message() : (int) wp_remote_retrieve_response_code( $response );
 	$data     = is_wp_error( $response ) ? null : json_decode( wp_remote_retrieve_body( $response ), true );
 	$ok       = is_array( $data ) && ! empty( $data['version'] );
