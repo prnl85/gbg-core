@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.16
+ * Version: 0.3.17
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.16';
+const GBG_CORE_VERSION = '0.3.17';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -69,6 +69,7 @@ function gbg_core_defaults(): array {
 		'pin_enabled'        => false,
 		'pin_min_width'      => 300,
 		'lightbox_fix'       => true,
+		'person_same_as'     => array(),
 		// Pages without the save bar (legal, contact, link pages).
 		'share_skip_slugs'   => array( 'privacy-policy', 'contact', 'links', 'about-me', 'how-gobackpackgo-makes-money', 'sitemap' ),
 	);
@@ -105,6 +106,9 @@ function gbg_core_sanitize( array $input ): array {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = sanitize_text_field( (string) $input[ $key ] );
 		}
+	}
+	if ( array_key_exists( 'person_same_as', $input ) ) {
+		$clean['person_same_as'] = array_values( array_filter( array_map( 'esc_url_raw', (array) $input['person_same_as'] ), static fn( $u ) => str_starts_with( $u, 'https://' ) ) );
 	}
 	if ( array_key_exists( 'share_skip_slugs', $input ) ) {
 		$clean['share_skip_slugs'] = array_values( array_filter( array_map( 'sanitize_title', (array) $input['share_skip_slugs'] ) ) );
@@ -1509,4 +1513,21 @@ add_action(
 		wp_add_inline_style( 'gbg-magnific-popup', '.mfp-bg{z-index:1000000!important;background:#0b0b0b}.mfp-bg.mfp-ready{opacity:.94!important}.mfp-wrap{z-index:1000001!important}.mfp-title{font-size:15px;line-height:1.4;padding-right:60px}.mfp-counter{font-size:13px}' );
 	},
 	20
+);
+
+/* -------------------------------------------------------------------------
+ * Author profiles Yoast has no field for (Paul 21-10: Strava): extra sameAs links for the Person in the schema, set
+ * with POST /gbg/v1/settings {"person_same_as": ["https://www.strava.com/athletes/..."]}. Only for real users' Person
+ * pieces (not the Organization).
+ * ---------------------------------------------------------------------- */
+add_filter(
+	'wpseo_schema_person',
+	static function ( $data ) {
+		$extra = (array) ( gbg_core_settings()['person_same_as'] ?? array() );
+		if ( ! $extra || ! is_array( $data ) ) {
+			return $data;
+		}
+		$data['sameAs'] = array_values( array_unique( array_merge( (array) ( $data['sameAs'] ?? array() ), $extra ) ) );
+		return $data;
+	}
 );
