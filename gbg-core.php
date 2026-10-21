@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.6
+ * Version: 0.3.7
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.6';
+const GBG_CORE_VERSION = '0.3.7';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1360,7 +1360,7 @@ add_action(
 		$cfg = wp_json_encode( array( 'pin' => (bool) $s['pin_enabled'], 'min' => (int) $s['pin_min_width'], 'url' => gbg_core_share_link( (string) get_permalink( $id ), 'pinterest' ), 'title' => wp_strip_all_tags( (string) get_the_title( $id ) ) ) );
 		echo '<style id="gbg-share-css">.gbg-share{display:flex;flex-wrap:wrap;align-items:center;gap:.5em;margin:1.2em 0 1.6em;padding:.8em 0;border-top:1px solid rgba(0,0,0,.08);border-bottom:1px solid rgba(0,0,0,.08)}'
 			. '.gbg-share-label{flex-basis:100%;font-weight:600;font-size:.95em}.gbg-share-btn{display:inline-flex;align-items:center;min-height:40px;padding:0 1em;border:1px solid rgba(0,0,0,.18);border-radius:20px;background:transparent;color:inherit!important;font:inherit;font-size:.9em;text-decoration:none!important;cursor:pointer}'
-			. '.gbg-share-btn{gap:.45em}.gbg-share-btn svg{flex:none}.gbg-share-short{display:none}.gbg-share-btn:hover{border-color:currentColor}.gbg-share-pinterest{background:#e60023;border-color:#e60023;color:#fff!important}.gbg-share-whatsapp{border-color:#25d366}.gbg-share [hidden]{display:none!important}.gbg-share-thanks{flex-basis:100%;font-size:.9em;font-weight:600;color:#2e7d32}.gbg-share-thanks:empty{display:none}@media(max-width:767px){.gbg-share{gap:.75em}.gbg-share-btn{flex-direction:column;justify-content:center;gap:.25em;width:72px;min-height:64px;padding:.5em 0;border-radius:14px;font-size:.75em}.gbg-share-txt{display:none}.gbg-share-short{display:block;line-height:1.1}}.gbg-has-native .gbg-share-email,.gbg-has-native .gbg-share-copy,.gbg-has-native .gbg-share-whatsapp{display:none!important}'
+			. '.gbg-share-btn{gap:.45em}.gbg-share-btn svg{flex:none}.gbg-share-short{display:none}.gbg-share-btn:hover{border-color:currentColor}.gbg-share-pinterest{background:#e60023;border-color:#e60023;color:#fff!important}.gbg-share-whatsapp{border-color:#25d366}.gbg-share [hidden]{display:none!important}.gbg-share-thanks{flex-basis:100%;font-size:.9em;font-weight:600;color:#2e7d32}.gbg-share-thanks:empty{display:none}@media(max-width:767px){.gbg-share{gap:.6em}.gbg-share-native{order:1}.gbg-share-whatsapp{order:2}.gbg-share-pinterest{order:3}.gbg-share-pdf{order:4}.gbg-share-email,.gbg-share-copy{order:5}.gbg-share-label,.gbg-share-thanks{order:0}.gbg-share-thanks{order:9}.gbg-share-btn{flex-direction:column;justify-content:center;gap:.25em;width:72px;min-height:64px;padding:.5em 0;border-radius:14px;font-size:.75em}.gbg-share-txt{display:none}.gbg-share-short{display:block;line-height:1.1}}.gbg-has-native .gbg-share-email,.gbg-has-native .gbg-share-copy{display:none!important}'
 			. '.gbg-pin-img{position:absolute;z-index:50;display:none;padding:.4em .9em;border-radius:20px;background:#e60023;color:#fff!important;font:600 14px/1.4 sans-serif;text-decoration:none!important;box-shadow:0 2px 6px rgba(0,0,0,.25)}'
 			. '@media print{.l-header,header,.l-footer,footer,.gbg-share,.gbg-bar,.gbg-optin,.gbg-pin-img,#gt_float_wrapper,.w-toplink,.w-btn{display:none!important}body{background:#fff}}</style>'
 			. '<script id="gbg-share-js">(function(c){'
