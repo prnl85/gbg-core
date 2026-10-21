@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.9
+ * Version: 0.3.10
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.9';
+const GBG_CORE_VERSION = '0.3.10';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -782,6 +782,8 @@ add_action(
 						$stored = get_option( GBG_CORE_OPTION, array() );
 						$merged = array_merge( is_array( $stored ) ? $stored : array(), gbg_core_sanitize( $input ) );
 						update_option( GBG_CORE_OPTION, $merged, false );
+						// Front-end features (A/B tests, share bar, opt-in) live in the page HTML: empty the page cache so visitors get them.
+						do_action( 'breeze_clear_all_cache' );
 						return array(
 							'version'  => GBG_CORE_VERSION,
 							'settings' => gbg_core_settings( true ),
@@ -1378,7 +1380,7 @@ function gbg_core_share_insert( string $content, string $bar, string $position )
 	$top = $content . $bar;
 	if ( preg_match_all( '~<p[\s>].*?</p>~is', $content, $all, PREG_OFFSET_CAPTURE ) ) {
 		foreach ( $all[0] as $p ) {
-			if ( str_word_count( wp_strip_all_tags( $p[0] ) ) >= 20 ) {
+			if ( str_word_count( wp_strip_all_tags( $p[0] ) ) >= 20 && ! str_contains( $p[0], 'gbg-disclosure' ) ) {
 				$end = $p[1] + strlen( $p[0] );
 				$top = substr( $content, 0, $end ) . $bar . substr( $content, $end );
 				break;
