@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.22
+ * Version: 0.3.23
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.22';
+const GBG_CORE_VERSION = '0.3.23';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -72,6 +72,11 @@ function gbg_core_defaults(): array {
 		'person_same_as'     => array(),
 		// Pages without the save bar (legal, contact, link pages).
 		'share_skip_slugs'   => array( 'privacy-policy', 'contact', 'links', 'about-me', 'how-gobackpackgo-makes-money', 'sitemap' ),
+		// Generated affiliate links (scripts/affiliate_links.py): slug => platform URL, served as /go/<slug>/. Empty = Lasso.
+		'go_links'           => array(),
+		'go_hosts'           => array( 'tpx.gr', 'tp.st', 'tpk.lv', 'pxf.io', 'sjv.io', '7eer.net', 'ojrq.net' ),
+		// Promo codes from the platforms: merchant, code, text, until (Y-m-d), note. Shown by [gbg_promo] until their end date.
+		'promos'             => array(),
 	);
 }
 
@@ -139,6 +144,16 @@ function gbg_core_sanitize( array $input ): array {
 	}
 	if ( array_key_exists( 'privacy_url', $input ) ) {
 		$clean['privacy_url'] = esc_url_raw( (string) $input['privacy_url'] );
+	}
+	if ( array_key_exists( 'go_hosts', $input ) ) {
+		$hosts             = array_map( static fn( $h ) => strtolower( trim( (string) $h ) ), (array) $input['go_hosts'] );
+		$clean['go_hosts'] = array_values( array_unique( array_filter( $hosts, static fn( $h ) => (bool) preg_match( '/^[a-z0-9.-]+$/', $h ) ) ) );
+	}
+	if ( array_key_exists( 'go_links', $input ) ) {
+		$clean['go_links'] = gbg_core_go_sanitize( (array) $input['go_links'], $clean['go_hosts'] ?? gbg_core_settings()['go_hosts'] );
+	}
+	if ( array_key_exists( 'promos', $input ) ) {
+		$clean['promos'] = gbg_core_promos_sanitize( (array) $input['promos'] );
 	}
 	return $clean;
 }
@@ -687,6 +702,8 @@ function gbg_core_health(): array {
 		),
 		'plugin_updates'     => $pending,
 		'update_channel'     => get_option( 'gbg_core_release_check', array() ),
+		'go_links'           => array_keys( (array) gbg_core_settings()['go_links'] ),
+		'promos'             => array_map( static fn( $p ) => $p['merchant'] . ' ' . $p['code'] . ' ' . $p['until'], (array) gbg_core_settings()['promos'] ),
 		'anonymous_selftest' => gbg_core_anon_selftest(),
 		'theme'              => wp_get_theme()->get_template() . ' ' . wp_get_theme( get_template() )->get( 'Version' ),
 	);
@@ -1610,4 +1627,120 @@ add_filter(
 		$data['sameAs'] = array_values( array_unique( array_merge( (array) ( $data['sameAs'] ?? array() ), $extra ) ) );
 		return $data;
 	}
+);
+
+/* -------------------------------------------------------------------------
+ * Generated affiliate links and promo codes (Paul 21-10: no hand-made links, everything from the platforms' APIs).
+ * scripts/affiliate_links.py creates the links (Travelpayouts links API, impact.com TrackingLinks) and posts
+ * {"go_links": {slug: url}, "promos": [...]} to /gbg/v1/settings. /go/<slug>/ then answers with a 302 to that URL
+ * (noindex, not cached) before Lasso sees the request; slugs not in the map stay with Lasso. Only https targets on
+ * go_hosts (or a subdomain) are accepted. [gbg_promo merchant="airhelp"] shows a valid code until its end date.
+ * ---------------------------------------------------------------------- */
+
+function gbg_core_host_allowed( string $host, array $hosts ): bool {
+	foreach ( $hosts as $h ) {
+		if ( $host === $h || str_ends_with( $host, '.' . $h ) ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function gbg_core_go_sanitize( array $links, array $hosts ): array {
+	$out = array();
+	foreach ( $links as $slug => $url ) {
+		$slug = strtolower( (string) $slug );
+		$url  = trim( (string) $url );
+		$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		if ( preg_match( '/^[a-z0-9-]{1,60}$/', $slug ) && str_starts_with( $url, 'https://' ) && gbg_core_host_allowed( $host, $hosts ) ) {
+			$out[ $slug ] = esc_url_raw( $url );
+		}
+	}
+	return $out;
+}
+
+// Target for a request path (with or without a language prefix such as /nl/), or null when it is not ours.
+function gbg_core_go_target( string $path, array $links ): ?string {
+	if ( ! $links || ! preg_match( '#^/(?:[a-z]{2}(?:-[a-z]{2})?/)?go/([a-z0-9-]+)/?$#', strtolower( $path ), $m ) ) {
+		return null;
+	}
+	return $links[ $m[1] ] ?? null;
+}
+
+function gbg_core_promos_sanitize( array $promos ): array {
+	$out = array();
+	foreach ( $promos as $p ) {
+		$p     = (array) $p;
+		$code  = strtoupper( preg_replace( '/[^A-Za-z0-9_-]/', '', (string) ( $p['code'] ?? '' ) ) );
+		$until = (string) ( $p['until'] ?? '' );
+		$m     = sanitize_title( (string) ( $p['merchant'] ?? '' ) );
+		if ( $code && $m && preg_match( '/^\d{4}-\d{2}-\d{2}$/', $until ) ) {
+			$out[] = array(
+				'merchant' => $m,
+				'code'     => substr( $code, 0, 30 ),
+				'text'     => sanitize_text_field( (string) ( $p['text'] ?? '' ) ),
+				'until'    => $until,
+				'note'     => sanitize_text_field( (string) ( $p['note'] ?? '' ) ),
+				'go'       => sanitize_title( (string) ( $p['go'] ?? $m ) ),
+			);
+		}
+	}
+	return $out;
+}
+
+function gbg_core_promo( string $merchant, string $today ): ?array {
+	foreach ( (array) gbg_core_settings()['promos'] as $p ) {
+		if ( $p['merchant'] === $merchant && $p['until'] >= $today ) {
+			return $p;
+		}
+	}
+	return null;
+}
+
+function gbg_core_promo_html( array $p ): string {
+	static $assets = false;
+	$until = gmdate( 'j F Y', (int) strtotime( $p['until'] . ' 12:00:00 UTC' ) );
+	$go    = isset( gbg_core_settings()['go_links'][ $p['go'] ] ) ? '/go/' . $p['go'] . '/' : '';
+	$html  = '<div class="gbg-promo" data-merchant="' . esc_attr( $p['merchant'] ) . '"><p class="gbg-promo-t">'
+		. '<span class="gbg-promo-k">Promo code</span> <strong class="gbg-promo-c">' . esc_html( $p['code'] ) . '</strong> '
+		. '<button type="button" class="gbg-promo-copy" data-code="' . esc_attr( $p['code'] ) . '">Copy code</button></p>'
+		. ( $p['text'] ? '<p class="gbg-promo-w">' . esc_html( $p['text'] ) . '</p>' : '' )
+		. '<p class="gbg-promo-v">Valid until ' . esc_html( $until ) . ( $p['note'] ? '. ' . esc_html( $p['note'] ) : '' ) . '.</p>'
+		. ( $go ? '<p class="gbg-promo-a"><a href="' . esc_url( $go ) . '" rel="sponsored nofollow" target="_blank">Use the code at ' . esc_html( ucfirst( $p['merchant'] ) ) . '</a></p>' : '' )
+		. '</div>';
+	if ( ! $assets ) {
+		$assets = true;
+		$html  .= '<style>.gbg-promo{border:2px dashed #f2a33a;border-radius:10px;padding:14px 16px;margin:1.2em 0;background:rgba(242,163,58,.08)}'
+			. '.gbg-promo p{margin:0 0 6px}.gbg-promo p:last-child{margin:0}.gbg-promo-k{font-size:13px;text-transform:uppercase;letter-spacing:.06em;opacity:.75}'
+			. '.gbg-promo-c{font-size:1.25em;letter-spacing:.08em}.gbg-promo-copy{margin-left:8px;padding:6px 12px;border:0;border-radius:6px;background:#f2a33a;color:#1b1b1b;font-weight:600;cursor:pointer;min-height:36px}'
+			. '.gbg-promo-v{font-size:13px;opacity:.8}.gbg-promo-a a{font-weight:600}</style>'
+			. '<script>document.addEventListener("click",function(e){var b=e.target.closest(".gbg-promo-copy");if(!b)return;var c=b.getAttribute("data-code"),ok=function(){b.textContent="Copied"};'
+			. 'if(navigator.clipboard)navigator.clipboard.writeText(c).then(ok,function(){});if(window.gtag)gtag("event","promo_copy",{promo_code:c})});</script>';
+	}
+	return $html;
+}
+
+add_shortcode(
+	'gbg_promo',
+	static function ( $atts ) {
+		$atts = shortcode_atts( array( 'merchant' => '' ), $atts );
+		$p    = gbg_core_promo( sanitize_title( (string) $atts['merchant'] ), gmdate( 'Y-m-d' ) );
+		return $p ? gbg_core_promo_html( $p ) : '';
+	}
+);
+
+add_action(
+	'init',
+	static function () {
+		$target = gbg_core_go_target( (string) wp_parse_url( $_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH ), (array) gbg_core_settings()['go_links'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+		if ( ! $target || is_admin() ) {
+			return;
+		}
+		header( 'X-Robots-Tag: noindex, nofollow' );
+		header( 'Cache-Control: no-store, private' );
+		header( 'X-GBG-Go: 1' );
+		wp_redirect( $target, 302, 'GoBackpackGo' ); // phpcs:ignore WordPress.Security.SafeRedirect -- targets are allowlisted
+		exit;
+	},
+	1
 );
