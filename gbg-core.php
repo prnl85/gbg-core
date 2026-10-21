@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.11
+ * Version: 0.3.12
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.11';
+const GBG_CORE_VERSION = '0.3.12';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -69,6 +69,8 @@ function gbg_core_defaults(): array {
 		'pin_enabled'        => false,
 		'pin_min_width'      => 300,
 		'lightbox_fix'       => true,
+		// Pages without the save bar (legal, contact, link pages).
+		'share_skip_slugs'   => array( 'privacy-policy', 'contact', 'links', 'about-me', 'how-gobackpackgo-makes-money', 'sitemap' ),
 	);
 }
 
@@ -103,6 +105,9 @@ function gbg_core_sanitize( array $input ): array {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = sanitize_text_field( (string) $input[ $key ] );
 		}
+	}
+	if ( array_key_exists( 'share_skip_slugs', $input ) ) {
+		$clean['share_skip_slugs'] = array_values( array_filter( array_map( 'sanitize_title', (array) $input['share_skip_slugs'] ) ) );
 	}
 	if ( array_key_exists( 'share_label', $input ) ) {
 		$clean['share_label'] = sanitize_text_field( (string) $input['share_label'] );
@@ -1395,15 +1400,22 @@ add_filter(
 	'the_content',
 	static function ( $content ) {
 		$s = gbg_core_settings();
-		if ( ! $s['share_enabled'] || ! is_string( $content ) || is_admin() || is_feed() || ! is_singular( 'post' ) || is_front_page()
+		if ( ! $s['share_enabled'] || ! is_string( $content ) || is_admin() || is_feed() || ! is_singular( array( 'post', 'page' ) ) || is_front_page()
 			|| ( defined( 'REST_REQUEST' ) && REST_REQUEST ) || str_contains( $content, 'class="gbg-share"' ) ) {
 			return $content;
 		}
 		$post_id = (int) get_the_ID();
-		if ( $post_id !== (int) get_queried_object_id() ) {
+		if ( $post_id !== (int) get_queried_object_id() || in_array( (string) get_post_field( 'post_name', $post_id ), (array) $s['share_skip_slugs'], true ) ) {
 			return $content;
 		}
-		return gbg_core_share_insert( $content, gbg_core_share_bar( $post_id ), (string) $s['share_position'] );
+		$bar = gbg_core_share_bar( $post_id );
+		// Pages built with sections (eSIM, flight compensation, car rental, hubs): right under the first section (the
+		// hero with the answer and the main button), inside the theme's content width.
+		if ( 'page' === get_post_type( $post_id ) && preg_match( '~</section>~i', $content, $m, PREG_OFFSET_CAPTURE ) ) {
+			$wrap = '<section class="l-section wpb_row height_auto gbg-share-section" style="padding-top:0;padding-bottom:0"><div class="l-section-h i-cf">' . $bar . '</div></section>';
+			return substr_replace( $content, '</section>' . $wrap, $m[0][1], 10 );
+		}
+		return gbg_core_share_insert( $content, $bar, (string) $s['share_position'] );
 	},
 	30
 );
@@ -1465,7 +1477,7 @@ add_action(
 			return;
 		}
 		wp_enqueue_style( 'gbg-magnific-popup', get_template_directory_uri() . $file, array(), (string) wp_get_theme( 'Impreza' )->get( 'Version' ) );
-		wp_add_inline_style( 'gbg-magnific-popup', '.mfp-bg{z-index:1000000!important;background:#0b0b0b;opacity:.92}.mfp-wrap{z-index:1000001!important}.mfp-title{font-size:15px;line-height:1.4;padding-right:60px}.mfp-counter{font-size:13px}' );
+		wp_add_inline_style( 'gbg-magnific-popup', '.mfp-bg{z-index:1000000!important;background:#0b0b0b}.mfp-bg.mfp-ready{opacity:.94!important}.mfp-wrap{z-index:1000001!important}.mfp-title{font-size:15px;line-height:1.4;padding-right:60px}.mfp-counter{font-size:13px}' );
 	},
 	20
 );
