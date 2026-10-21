@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.28
+ * Version: 0.3.29
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.28';
+const GBG_CORE_VERSION = '0.3.29';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -74,7 +74,11 @@ function gbg_core_defaults(): array {
 		'share_skip_slugs'   => array( 'privacy-policy', 'contact', 'links', 'about-me', 'how-gobackpackgo-makes-money', 'sitemap' ),
 		// Generated affiliate links (scripts/affiliate_links.py): slug => platform URL, served as /go/<slug>/. Empty = Lasso.
 		'go_links'           => array(),
-		'go_hosts'           => array( 'tpx.gr', 'tp.st', 'tpk.lv', 'pxf.io', 'sjv.io', '7eer.net', 'ojrq.net', 'discovercars.com' ),
+		'go_hosts'           => array( 'tpx.gr', 'tp.st', 'tpk.lv', 'tp.media', 'pxf.io', 'sjv.io', '7eer.net', 'ojrq.net', 'discovercars.com' ),
+		// Per-country targets (scripts/go_country.py): go slug => country => URL, and page slug => country. On such a page
+		// /go/<slug>/ links get ?c=<country>&s=p<ID>; the redirect then uses that country's link with the page as sub_id.
+		'go_country'         => array(),
+		'go_pages'           => array(),
 		// Promo codes from the platforms: merchant, code, text, until (Y-m-d), note. Shown by [gbg_promo] until their end date.
 		'promos'             => array(),
 		// GA4 events (Paul 21-10: measure everything to optimise conversions). GA4 is loaded through GTM, so window.gtag
@@ -165,6 +169,24 @@ function gbg_core_sanitize( array $input ): array {
 	}
 	if ( array_key_exists( 'promos', $input ) ) {
 		$clean['promos'] = gbg_core_promos_sanitize( (array) $input['promos'] );
+	}
+	if ( array_key_exists( 'go_country', $input ) ) {
+		$hosts               = $clean['go_hosts'] ?? gbg_core_settings()['go_hosts'];
+		$clean['go_country'] = array();
+		foreach ( (array) $input['go_country'] as $slug => $map ) {
+			$map = gbg_core_go_sanitize( (array) $map, $hosts ); // same rules: key [a-z0-9-], https, allowlisted host
+			if ( $map && preg_match( '/^[a-z0-9-]{1,60}$/', (string) $slug ) ) {
+				$clean['go_country'][ (string) $slug ] = $map;
+			}
+		}
+	}
+	if ( array_key_exists( 'go_pages', $input ) ) {
+		$clean['go_pages'] = array();
+		foreach ( (array) $input['go_pages'] as $page => $country ) {
+			if ( preg_match( '/^[a-z0-9-]{1,60}$/', (string) $country ) && sanitize_title( (string) $page ) === (string) $page ) {
+				$clean['go_pages'][ (string) $page ] = (string) $country;
+			}
+		}
 	}
 	return $clean;
 }
@@ -714,6 +736,8 @@ function gbg_core_health(): array {
 		'plugin_updates'     => $pending,
 		'update_channel'     => get_option( 'gbg_core_release_check', array() ),
 		'go_links'           => array_keys( (array) gbg_core_settings()['go_links'] ),
+		'go_country'         => array_map( 'count', (array) gbg_core_settings()['go_country'] ),
+		'go_pages'           => count( (array) gbg_core_settings()['go_pages'] ),
 		'ga4_mp'             => array( 'measurement_id' => gbg_core_settings()['ga4_measurement_id'], 'secret_set' => '' !== (string) get_option( 'gbg_core_ga4_secret', '' ), 'track_enabled' => gbg_core_settings()['track_enabled'], 'today' => get_transient( 'gbg_core_mp_stats' ) ?: array() ),
 		'promos'             => array_map( static fn( $p ) => $p['merchant'] . ' ' . $p['code'] . ' ' . $p['until'], (array) gbg_core_settings()['promos'] ),
 		'anonymous_selftest' => gbg_core_anon_selftest(),
@@ -1680,6 +1704,44 @@ function gbg_core_go_target( string $path, array $links ): ?string {
 	return $links[ $m[1] ] ?? null;
 }
 
+// Country link (?c=) with the page's sub_id (?s=p123) when known; otherwise the generic target.
+function gbg_core_go_country_target( string $path, array $query, array $s ): ?string {
+	$target = gbg_core_go_target( $path, (array) $s['go_links'] );
+	if ( ! $target || ! preg_match( '#/go/([a-z0-9-]+)#', strtolower( $path ), $m ) ) {
+		return $target;
+	}
+	$c   = strtolower( (string) ( $query['c'] ?? '' ) );
+	$url = (string) ( $s['go_country'][ $m[1] ][ $c ] ?? '' );
+	if ( '' === $url ) {
+		return $target;
+	}
+	$sub = (string) ( $query['s'] ?? '' );
+	return preg_match( '/^p\d{1,9}$/', $sub ) ? (string) preg_replace( '/([?&]sub_id=)[^&]*/', '${1}' . $sub, $url ) : $url;
+}
+
+// On a mapped page: /go/<slug>/ links (own host or relative) carry the page's country and ID.
+function gbg_core_go_country_links( string $html, string $country, int $post_id, array $slugs ): string {
+	if ( ! $slugs ) {
+		return $html;
+	}
+	$rx = '#href="((?:https?://' . preg_quote( (string) wp_parse_url( home_url(), PHP_URL_HOST ), '#' ) . ')?/go/(' . implode( '|', array_map( 'preg_quote', $slugs ) ) . ')/)"#';
+	return (string) preg_replace( $rx, 'href="$1?c=' . $country . '&amp;s=p' . $post_id . '"', $html );
+}
+
+add_filter(
+	'the_content',
+	static function ( $content ) {
+		$s = gbg_core_settings();
+		if ( ! $s['go_pages'] || ! is_string( $content ) || is_admin() || is_feed() || ! is_singular() ) {
+			return $content;
+		}
+		$post_id = (int) get_the_ID();
+		$country = $s['go_pages'][ (string) get_post_field( 'post_name', $post_id ) ] ?? '';
+		return $country ? gbg_core_go_country_links( $content, $country, $post_id, array_keys( (array) $s['go_country'] ) ) : $content;
+	},
+	25
+);
+
 function gbg_core_promos_sanitize( array $promos ): array {
 	$out = array();
 	foreach ( $promos as $p ) {
@@ -1745,7 +1807,7 @@ add_shortcode(
 add_action(
 	'init',
 	static function () {
-		$target = gbg_core_go_target( (string) wp_parse_url( $_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH ), (array) gbg_core_settings()['go_links'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+		$target = gbg_core_go_country_target( (string) wp_parse_url( $_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH ), $_GET, gbg_core_settings() ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput,WordPress.Security.NonceVerification
 		if ( ! $target || is_admin() ) {
 			return;
 		}
