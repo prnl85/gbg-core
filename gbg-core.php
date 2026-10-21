@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.5
+ * Version: 0.3.6
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.5';
+const GBG_CORE_VERSION = '0.3.6';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1296,16 +1296,29 @@ function gbg_core_share_bar( int $post_id ): string {
 	if ( '' === $media ) {
 		$media = (string) get_the_post_thumbnail_url( $post_id, 'full' );
 	}
-	$btn   = static fn( string $key, string $href, string $label, string $extra = '' ) => '<a class="gbg-share-btn gbg-share-' . $key . '" href="'
-		. esc_url( $href ) . '" data-gbg-share="' . $key . '"' . $extra . '>' . esc_html( $label ) . '</a>';
-	$items = array( '<button type="button" class="gbg-share-btn gbg-share-native" data-gbg-share="native" hidden>Save or send…</button>' );
+	// Icon + label: full label on desktop, a one-word caption under the icon on mobile. Both are real text (SEO, screen
+	// readers); the icons are decorative (aria-hidden).
+	$icon  = static fn( string $d, bool $fill = false ) => '<svg aria-hidden="true" focusable="false" width="22" height="22" viewBox="0 0 24 24" '
+		. ( $fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"' ) . '><path d="' . $d . '"/></svg>';
+	$icons = array(
+		'native'    => $icon( 'M12 3v12M7 8l5-5 5 5M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6' ),
+		'pinterest' => $icon( 'M12 2a10 10 0 0 0-3.6 19.3c-.1-.8-.2-2 0-2.9l1.2-5s-.3-.6-.3-1.5c0-1.4.8-2.4 1.8-2.4.9 0 1.3.6 1.3 1.4 0 .9-.5 2.1-.8 3.3-.2 1 .5 1.8 1.5 1.8 1.8 0 3.1-1.9 3.1-4.6 0-2.4-1.7-4.1-4.2-4.1-2.9 0-4.5 2.1-4.5 4.4 0 .9.3 1.8.8 2.3l.1.4-.3 1.2c0 .2-.2.3-.4.2-1.3-.6-2.1-2.5-2.1-4 0-3.3 2.4-6.3 6.9-6.3 3.6 0 6.4 2.6 6.4 6 0 3.6-2.3 6.5-5.4 6.5-1.1 0-2.1-.6-2.4-1.2l-.7 2.5c-.2.9-.9 2.1-1.3 2.8A10 10 0 1 0 12 2z', true ),
+		'email'     => $icon( 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM3 7l9 6 9-6' ),
+		'copy'      => $icon( 'M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1' ),
+		'pdf'       => $icon( 'M12 3v12M7 10l5 5 5-5M5 21h14' ),
+		'whatsapp'  => $icon( 'M20 12a8 8 0 0 1-11.8 7L4 20l1-4.1A8 8 0 1 1 20 12z' ),
+	);
+	$inner = static fn( string $key, string $label, string $short ) => $icons[ $key ] . '<span class="gbg-share-txt">' . esc_html( $label ) . '</span><span class="gbg-share-short" aria-hidden="true">' . esc_html( $short ) . '</span>';
+	$btn   = static fn( string $key, string $href, string $label, string $short, string $extra = '' ) => '<a class="gbg-share-btn gbg-share-' . $key . '" href="'
+		. esc_url( $href ) . '" data-gbg-share="' . $key . '"' . $extra . '>' . $inner( $key, $label, $short ) . '</a>';
+	$items = array( '<button type="button" class="gbg-share-btn gbg-share-native" data-gbg-share="native" hidden>' . $inner( 'native', 'Save or send…', 'Save' ) . '</button>' );
 	if ( '' !== $media ) {
-		$items[] = $btn( 'pinterest', gbg_core_pin_url( gbg_core_share_link( $url, 'pinterest' ), $media, $title ), 'Save to Pinterest', ' target="_blank" rel="noopener nofollow"' );
+		$items[] = $btn( 'pinterest', gbg_core_pin_url( gbg_core_share_link( $url, 'pinterest' ), $media, $title ), 'Save to Pinterest', 'Pinterest', ' target="_blank" rel="noopener nofollow"' );
 	}
-	$items[] = $btn( 'email', 'mailto:?subject=' . rawurlencode( $title ) . '&body=' . rawurlencode( "Saved for my trip:\n" . gbg_core_share_link( $url, 'email' ) ), 'Email it to myself', ' rel="nofollow"' );
-	$items[] = '<button type="button" class="gbg-share-btn gbg-share-copy" data-gbg-share="copy" data-url="' . esc_attr( gbg_core_share_link( $url, 'copy' ) ) . '" hidden>Copy the link</button>';
-	$items[] = '<button type="button" class="gbg-share-btn gbg-share-pdf" data-gbg-share="pdf" hidden>Save as PDF for offline</button>';
-	$items[] = $btn( 'whatsapp', 'https://wa.me/?text=' . rawurlencode( $title . ' ' . gbg_core_share_link( $url, 'whatsapp' ) ), 'Send to a travel buddy', ' target="_blank" rel="noopener nofollow"' );
+	$items[] = $btn( 'email', 'mailto:?subject=' . rawurlencode( $title ) . '&body=' . rawurlencode( "Saved for my trip:\n" . gbg_core_share_link( $url, 'email' ) ), 'Email it to myself', 'Email', ' rel="nofollow"' );
+	$items[] = '<button type="button" class="gbg-share-btn gbg-share-copy" data-gbg-share="copy" data-url="' . esc_attr( gbg_core_share_link( $url, 'copy' ) ) . '" hidden>' . $inner( 'copy', 'Copy the link', 'Link' ) . '</button>';
+	$items[] = '<button type="button" class="gbg-share-btn gbg-share-pdf" data-gbg-share="pdf" hidden>' . $inner( 'pdf', 'Save as PDF for offline', 'PDF' ) . '</button>';
+	$items[] = $btn( 'whatsapp', 'https://wa.me/?text=' . rawurlencode( $title . ' ' . gbg_core_share_link( $url, 'whatsapp' ) ), 'Send to a travel buddy', 'WhatsApp', ' target="_blank" rel="noopener nofollow"' );
 	return '<div class="gbg-share" role="group" aria-label="Save this guide"><span class="gbg-share-label">' . esc_html( (string) gbg_core_settings()['share_label'] ) . '</span>'
 		. implode( '', $items ) . '<span class="gbg-share-thanks" role="status" aria-live="polite"></span></div>';
 }
@@ -1347,7 +1360,7 @@ add_action(
 		$cfg = wp_json_encode( array( 'pin' => (bool) $s['pin_enabled'], 'min' => (int) $s['pin_min_width'], 'url' => gbg_core_share_link( (string) get_permalink( $id ), 'pinterest' ), 'title' => wp_strip_all_tags( (string) get_the_title( $id ) ) ) );
 		echo '<style id="gbg-share-css">.gbg-share{display:flex;flex-wrap:wrap;align-items:center;gap:.5em;margin:1.2em 0 1.6em;padding:.8em 0;border-top:1px solid rgba(0,0,0,.08);border-bottom:1px solid rgba(0,0,0,.08)}'
 			. '.gbg-share-label{flex-basis:100%;font-weight:600;font-size:.95em}.gbg-share-btn{display:inline-flex;align-items:center;min-height:40px;padding:0 1em;border:1px solid rgba(0,0,0,.18);border-radius:20px;background:transparent;color:inherit!important;font:inherit;font-size:.9em;text-decoration:none!important;cursor:pointer}'
-			. '.gbg-share-btn:hover{border-color:currentColor}.gbg-share-pinterest{background:#e60023;border-color:#e60023;color:#fff!important}.gbg-share-whatsapp{border-color:#25d366}.gbg-share [hidden]{display:none!important}.gbg-share-thanks{flex-basis:100%;font-size:.9em;font-weight:600;color:#2e7d32}.gbg-share-thanks:empty{display:none}.gbg-has-native .gbg-share-email,.gbg-has-native .gbg-share-copy,.gbg-has-native .gbg-share-whatsapp{display:none!important}'
+			. '.gbg-share-btn{gap:.45em}.gbg-share-btn svg{flex:none}.gbg-share-short{display:none}.gbg-share-btn:hover{border-color:currentColor}.gbg-share-pinterest{background:#e60023;border-color:#e60023;color:#fff!important}.gbg-share-whatsapp{border-color:#25d366}.gbg-share [hidden]{display:none!important}.gbg-share-thanks{flex-basis:100%;font-size:.9em;font-weight:600;color:#2e7d32}.gbg-share-thanks:empty{display:none}@media(max-width:767px){.gbg-share{gap:.75em}.gbg-share-btn{flex-direction:column;justify-content:center;gap:.25em;width:72px;min-height:64px;padding:.5em 0;border-radius:14px;font-size:.75em}.gbg-share-txt{display:none}.gbg-share-short{display:block;line-height:1.1}}.gbg-has-native .gbg-share-email,.gbg-has-native .gbg-share-copy,.gbg-has-native .gbg-share-whatsapp{display:none!important}'
 			. '.gbg-pin-img{position:absolute;z-index:50;display:none;padding:.4em .9em;border-radius:20px;background:#e60023;color:#fff!important;font:600 14px/1.4 sans-serif;text-decoration:none!important;box-shadow:0 2px 6px rgba(0,0,0,.25)}'
 			. '@media print{.l-header,header,.l-footer,footer,.gbg-share,.gbg-bar,.gbg-optin,.gbg-pin-img,#gt_float_wrapper,.w-toplink,.w-btn{display:none!important}body{background:#fff}}</style>'
 			. '<script id="gbg-share-js">(function(c){'
@@ -1355,7 +1368,7 @@ add_action(
 			. 'document.querySelectorAll(".gbg-share").forEach(function(bar){'
 			. 'var n=bar.querySelector(".gbg-share-native"),cp=bar.querySelector(".gbg-share-copy"),pdf=bar.querySelector(".gbg-share-pdf");'
 			. 'if(navigator.share&&matchMedia("(pointer:coarse)").matches){n.hidden=false;bar.classList.add("gbg-has-native");n.onclick=function(){navigator.share({title:c.title,url:cp.getAttribute("data-url").replace("utm_source=copy","utm_source=native")}).then(function(){ev("native")},function(){})}}'
-			. 'if(navigator.clipboard){cp.hidden=false;cp.onclick=function(){navigator.clipboard.writeText(cp.getAttribute("data-url")).then(function(){cp.textContent="Link copied";ev("copy");setTimeout(function(){cp.textContent="Copy the link"},2000)})}}'
+			. 'if(navigator.clipboard){cp.hidden=false;cp.onclick=function(){navigator.clipboard.writeText(cp.getAttribute("data-url")).then(function(){var tx=cp.querySelector(".gbg-share-txt");tx.textContent="Link copied";ev("copy");setTimeout(function(){tx.textContent="Copy the link"},2000)})}}'
 			. 'pdf.hidden=false;pdf.onclick=function(){ev("pdf");window.print()};'
 			. 'bar.querySelectorAll("a.gbg-share-btn").forEach(function(a){a.addEventListener("click",function(){ev(a.getAttribute("data-gbg-share"))})})});'
 			. 'if(!c.pin||!matchMedia("(hover:hover) and (pointer:fine)").matches)return;'
