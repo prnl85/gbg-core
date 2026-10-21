@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.24
+ * Version: 0.3.25
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.24';
+const GBG_CORE_VERSION = '0.3.25';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -77,6 +77,10 @@ function gbg_core_defaults(): array {
 		'go_hosts'           => array( 'tpx.gr', 'tp.st', 'tpk.lv', 'pxf.io', 'sjv.io', '7eer.net', 'ojrq.net', 'discovercars.com' ),
 		// Promo codes from the platforms: merchant, code, text, until (Y-m-d), note. Shown by [gbg_promo] until their end date.
 		'promos'             => array(),
+		// GA4 events (Paul 21-10: measure everything to optimise conversions). GA4 is loaded through GTM, so window.gtag
+		// does not exist; gbgEv() falls back to the gtag command queue in dataLayer (read by the GTM Google tag) and also
+		// pushes a GTM event object (gbg_<name>) for GTM triggers.
+		'track_enabled'      => false,
 	);
 }
 
@@ -91,7 +95,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -800,7 +804,7 @@ add_action(
 		echo "<script id=\"gbg-ab\">(function(c){var send=function(t,v,e){try{navigator.sendBeacon(c.u,JSON.stringify({t:t,v:v,e:e}))}catch(x){}};"
 			. "c.t.forEach(function(t){var els=[].slice.call(document.querySelectorAll(t.selector));if(!els.length)return;"
 			. "var v=t.variants[Math.floor(Math.random()*t.variants.length)];"
-			. "els.forEach(function(el){if(v.text){var l=el.querySelector('.w-btn-label')||el;l.textContent=v.text}"
+			. "els.forEach(function(el){el.setAttribute('data-gbg-ab',t.id+':'+v.key);if(v.text){var l=el.querySelector('.w-btn-label')||el;l.textContent=v.text}"
 			. "if(v['class'])el.className+=' '+v['class'];"
 			. "[].slice.call(el.tagName==='A'?[el]:el.querySelectorAll('a')).forEach(function(a){try{var u=new URL(a.href);"
 			. "if(u.searchParams.has('sub_id')){u.searchParams.set('sub_id',u.searchParams.get('sub_id')+'-'+t.id+v.key);a.href=u.toString()}}catch(x){}});"
@@ -1115,7 +1119,7 @@ function gbg_core_optin_assets(): string {
 		. 'fetch(c.u,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:f.email.value,name:f.name.value,hp:f.website.value,ms:Date.now()-t0,m:d.m,p:d.p,t:d.t,lang:lang,src:src,page:location.pathname})})'
 		. '.then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})}).then(function(r){if(!r.ok)throw new Error(r.j&&r.j.message||"error");'
 		. 'f.hidden=true;box.querySelector(".gbg-optin-consent").hidden=true;done.innerHTML=r.j.html;done.hidden=false;ls.set("gbg_lead","1");'
-		. 'barOff();if(window.gtag)gtag("event","generate_lead",{lead_magnet:d.m,lead_country:(r.j.country||"")});})'
+		. 'barOff();if(window.gbgEv)gbgEv("generate_lead",{lead_magnet:d.m,lead_country:(r.j.country||"")});})'
 		. '.catch(function(err){var p=document.createElement("p");p.className="gbg-optin-err";p.textContent=/email/i.test(err.message)?"Please check your email address.":"Something went wrong, please try again.";f.after(p);b.disabled=false});});});'
 		. 'if(bar&&!ls.get("gbg_lead")&&!(+ls.get("gbg_bar_x")>Date.now())){var pct=+bar.getAttribute("data-scroll"),on=function(){var h=document.documentElement;'
 		. 'if((h.scrollTop+innerHeight)/h.scrollHeight*100>=pct){bar.hidden=false;document.documentElement.classList.add("gbg-bar-on");removeEventListener("scroll",on)}};addEventListener("scroll",on,{passive:true});'
@@ -1565,7 +1569,7 @@ add_action(
 			. '.gbg-pin-img{position:absolute;z-index:50;display:none;padding:.4em .9em;border-radius:20px;background:#e60023;color:#fff!important;font:600 14px/1.4 sans-serif;text-decoration:none!important;box-shadow:0 2px 6px rgba(0,0,0,.25)}'
 			. '@media print{.l-header,header,.l-footer,footer,.gbg-share,.gbg-bar,.gbg-optin,.gbg-pin-img,#gt_float_wrapper,.w-toplink,.w-btn{display:none!important}body{background:#fff}}</style>'
 			. '<script id="gbg-share-js">(function(c){'
-			. 'function ev(m){if(window.gtag)gtag("event","share",{method:m,item_id:location.pathname});var t=document.querySelector(".gbg-share-thanks");if(t&&m!=="whatsapp"&&m!=="native")t.textContent="Good call. Future you will thank you on the road."}'
+			. 'function ev(m){if(window.gbgEv)gbgEv("share",{method:m,item_id:location.pathname});var t=document.querySelector(".gbg-share-thanks");if(t&&m!=="whatsapp"&&m!=="native")t.textContent="Good call. Future you will thank you on the road."}'
 			. 'document.querySelectorAll(".gbg-share").forEach(function(bar){'
 			. 'var n=bar.querySelector(".gbg-share-native"),cp=bar.querySelector(".gbg-share-copy"),pdf=bar.querySelector(".gbg-share-pdf");'
 			. 'if(navigator.share&&matchMedia("(pointer:coarse)").matches){n.hidden=false;bar.classList.add("gbg-has-native");n.onclick=function(){navigator.share({title:c.title,url:cp.getAttribute("data-url").replace("utm_source=copy","utm_source=native")}).then(function(){ev("native")},function(){})}}'
@@ -1715,7 +1719,7 @@ function gbg_core_promo_html( array $p ): string {
 			. '.gbg-promo-c{font-size:1.25em;letter-spacing:.08em}.gbg-promo-copy{margin-left:8px;padding:6px 12px;border:0;border-radius:6px;background:#f2a33a;color:#1b1b1b;font-weight:600;cursor:pointer;min-height:36px}'
 			. '.gbg-promo-v{font-size:13px;opacity:.8}.gbg-promo-a a{font-weight:600}</style>'
 			. '<script>document.addEventListener("click",function(e){var b=e.target.closest(".gbg-promo-copy");if(!b)return;var c=b.getAttribute("data-code"),ok=function(){b.textContent="Copied"};'
-			. 'if(navigator.clipboard)navigator.clipboard.writeText(c).then(ok,function(){});if(window.gtag)gtag("event","promo_copy",{promo_code:c})});</script>';
+			. 'if(navigator.clipboard)navigator.clipboard.writeText(c).then(ok,function(){});if(window.gbgEv)gbgEv("promo_copy",{promo_code:c})});</script>';
 	}
 	return $html;
 }
@@ -1741,6 +1745,48 @@ add_action(
 		header( 'X-GBG-Go: 1' );
 		wp_redirect( $target, 302, 'GoBackpackGo' ); // phpcs:ignore WordPress.Security.SafeRedirect -- targets are allowlisted
 		exit;
+	},
+	1
+);
+
+/* -------------------------------------------------------------------------
+ * GA4 click tracking (0.3.25). Every click on a /go/<slug>/ link or a link to an affiliate host becomes the GA4 event
+ * affiliate_click with link_slug, link_domain, placement (promo, ab, button, sticky, header, footer, content), ab_test
+ * and link_text. GA4's own outbound tracking misses /go/ links because they are on our domain. Same helper sends
+ * share, promo_copy and generate_lead. Off until track_enabled.
+ * ---------------------------------------------------------------------- */
+
+function gbg_core_track_config(): array {
+	$s     = gbg_core_settings();
+	$hosts = array_values( array_unique( array_merge( (array) $s['affiliate_hosts'], (array) $s['go_hosts'] ) ) );
+	$go    = array();
+	foreach ( (array) $s['go_links'] as $slug => $url ) {
+		$go[ $slug ] = preg_replace( '/^www\./', '', strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) ) );
+	}
+	return array( 'h' => $hosts, 'g' => $go );
+}
+
+function gbg_core_track_script(): string {
+	return '<script id="gbg-track">(function(c){window.gbgEv=function(n,p){p=p||{};window.dataLayer=window.dataLayer||[];'
+		. 'if(window.gtag){gtag("event",n,p)}else{(function(){dataLayer.push(arguments)})("event",n,p)}'
+		. 'var o={event:"gbg_"+n};for(var k in p)o[k]=p[k];dataLayer.push(o)};'
+		. 'document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href]");if(!a)return;var u;try{u=new URL(a.href,location.href)}catch(x){return}'
+		. 'var m=u.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2,4})?\/)?go\/([a-z0-9-]+)/i),slug=m?m[1].toLowerCase():"",host=u.hostname.replace(/^www\./,"").toLowerCase();'
+		. 'if(slug){if(u.hostname!==location.hostname)return;host=c.g[slug]||"go"}else if(!c.h.some(function(h){return host===h||host.slice(-h.length-1)==="."+h}))return;'
+		. 'var ab=a.closest("[data-gbg-ab]"),pl=a.closest(".gbg-promo")?"promo":ab?"ab":a.closest("footer,.l-footer")?"footer":a.closest("header,.l-header")?"header":'
+		. 'a.closest(".gbg-sticky,.w-sticky,[class*=sticky]")?"sticky":/\bw-btn\b|button/.test(a.className)?"button":"content";'
+		. 'gbgEv("affiliate_click",{link_slug:slug||host,link_domain:host,placement:pl,ab_test:ab?ab.getAttribute("data-gbg-ab"):"",'
+		. 'link_text:(a.textContent||a.getAttribute("aria-label")||"").replace(/\s+/g," ").trim().slice(0,80),transport_type:"beacon"})},true)})('
+		. wp_json_encode( gbg_core_track_config() ) . ');</script>';
+}
+
+add_action(
+	'wp_head',
+	static function () {
+		if ( ! gbg_core_settings()['track_enabled'] || is_admin() || is_user_logged_in() ) {
+			return; // editors and Claude's checks never count
+		}
+		echo gbg_core_track_script(); // phpcs:ignore WordPress.Security.EscapeOutput
 	},
 	1
 );
