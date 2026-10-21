@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.21
+ * Version: 0.3.22
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.21';
+const GBG_CORE_VERSION = '0.3.22';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -575,6 +575,19 @@ add_action(
  * ---------------------------------------------------------------------- */
 
 add_filter( 'xmlrpc_enabled', static fn( $on ) => gbg_core_settings()['xmlrpc_off'] ? false : $on );
+// 'xmlrpc_enabled' only stops logins over XML-RPC; pingbacks and system.multicall still answer. With xmlrpc_off the
+// whole endpoint answers 403 (nothing on this site uses it: no Jetpack, no mobile app).
+add_action(
+	'init',
+	static function () {
+		if ( defined( 'XMLRPC_REQUEST' ) && XMLRPC_REQUEST && gbg_core_settings()['xmlrpc_off'] ) {
+			status_header( 403 );
+			header( 'Content-Type: text/plain; charset=utf-8' );
+			exit( 'XML-RPC is disabled on this site.' );
+		}
+	},
+	0
+);
 add_filter(
 	'wp_headers',
 	static function ( $headers ) {
@@ -592,9 +605,16 @@ add_action(
 			global $wp_query;
 			$wp_query->set_404();
 			status_header( 404 );
+			nocache_headers();
+			// Stop here: otherwise redirect_canonical (later on this hook) still redirects ?author=1 to /author/<name>/.
+			$tpl = get_404_template();
+			if ( $tpl ) {
+				include $tpl;
+			}
+			exit;
 		}
 	},
-	1
+	0
 );
 
 add_filter(
@@ -614,6 +634,28 @@ add_filter(
 add_filter( 'the_generator', static fn( $gen ) => gbg_core_settings()['hide_generator'] ? '' : $gen );
 
 /** Facts for the security audit; only for the settings logins (same check as the settings route). */
+/** What an anonymous visitor gets (request from the server to itself, without login cookies): proves the hardening
+ * switches work, which cannot be tested through the authenticated API. Cached 10 minutes. */
+function gbg_core_anon_selftest(): array {
+	$cached = get_transient( 'gbg_core_anon_selftest' );
+	if ( is_array( $cached ) ) {
+		return $cached;
+	}
+	$home = home_url( '/' );
+	$code = static function ( string $url, array $args = array() ) {
+		$r = wp_remote_request( $url, array_merge( array( 'timeout' => 10, 'redirection' => 0, 'cookies' => array(), 'headers' => array( 'User-Agent' => 'gbg-core-selftest' ) ), $args ) );
+		return is_wp_error( $r ) ? $r->get_error_code() : (int) wp_remote_retrieve_response_code( $r );
+	};
+	$out = array(
+		'users_api' => $code( $home . 'wp-json/wp/v2/users' ),
+		'author_1'  => $code( $home . '?author=1' ),
+		'xmlrpc'    => $code( $home . 'xmlrpc.php', array( 'method' => 'POST', 'body' => '<?xml version="1.0"?><methodCall><methodName>system.listMethods</methodName></methodCall>' ) ),
+		'at'        => gmdate( 'c' ),
+	);
+	set_transient( 'gbg_core_anon_selftest', $out, 10 * MINUTE_IN_SECONDS );
+	return $out;
+}
+
 function gbg_core_health(): array {
 	$plugins = function_exists( 'get_plugins' ) ? get_plugins() : array();
 	$updates = get_site_transient( 'update_plugins' );
@@ -645,6 +687,7 @@ function gbg_core_health(): array {
 		),
 		'plugin_updates'     => $pending,
 		'update_channel'     => get_option( 'gbg_core_release_check', array() ),
+		'anonymous_selftest' => gbg_core_anon_selftest(),
 		'theme'              => wp_get_theme()->get_template() . ' ' . wp_get_theme( get_template() )->get( 'Version' ),
 	);
 }
