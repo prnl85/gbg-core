@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.17
+ * Version: 0.3.18
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.17';
+const GBG_CORE_VERSION = '0.3.18';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -446,11 +446,14 @@ function gbg_core_remote_release(): array {
 	if ( is_array( $cached ) ) {
 		return $cached;
 	}
-	$response = wp_remote_get( GBG_CORE_UPDATE_JSON, array( 'timeout' => 10 ) );
+	$response = wp_remote_get( GBG_CORE_UPDATE_JSON . '?t=' . time(), array( 'timeout' => 10 ) );
+	$code     = is_wp_error( $response ) ? $response->get_error_message() : (int) wp_remote_retrieve_response_code( $response );
 	$data     = is_wp_error( $response ) ? null : json_decode( wp_remote_retrieve_body( $response ), true );
-	$data     = is_array( $data ) ? $data : array();
-	set_transient( 'gbg_core_release', $data, HOUR_IN_SECONDS );
-	return $data;
+	$ok       = is_array( $data ) && ! empty( $data['version'] );
+	// A failed fetch is cached for 5 minutes only, so one hiccup does not hide a new version for an hour.
+	set_transient( 'gbg_core_release', $ok ? $data : array(), $ok ? HOUR_IN_SECONDS : 5 * MINUTE_IN_SECONDS );
+	update_option( 'gbg_core_release_check', array( 'at' => gmdate( 'c' ), 'status' => $code, 'version' => $ok ? $data['version'] : '' ), false );
+	return $ok ? $data : array();
 }
 
 add_filter(
@@ -493,6 +496,33 @@ add_filter(
 function gbg_core_is_staging(): bool {
 	return false !== strpos( (string) home_url(), 'cloudwaysapps.com' );
 }
+
+// POST /gbg/v1/refresh-update (settings logins, staging and live): fetch the release info now and let WordPress
+// re-check plugin updates, so a new version appears under Dashboard → Updates right away. Installs nothing.
+add_action(
+	'rest_api_init',
+	static function () {
+		register_rest_route(
+			'gbg/v1',
+			'/refresh-update',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => 'gbg_core_can_manage',
+				'callback'            => static function () {
+					delete_transient( 'gbg_core_release' );
+					delete_site_transient( 'update_plugins' );
+					if ( ! function_exists( 'wp_update_plugins' ) ) {
+						require_once ABSPATH . 'wp-includes/update.php';
+					}
+					wp_update_plugins();
+					$t = get_site_transient( 'update_plugins' );
+					$r = is_object( $t ) && isset( $t->response['gbg-core/gbg-core.php'] ) ? $t->response['gbg-core/gbg-core.php'] : null;
+					return array( 'installed' => GBG_CORE_VERSION, 'available' => $r ? $r->new_version : null, 'check' => get_option( 'gbg_core_release_check', array() ) );
+				},
+			)
+		);
+	}
+);
 
 // Staging only: POST /gbg/v1/self-update installs the newest release from the update channel right away (instead of
 // waiting for WordPress' twice-daily check). Same package check as the normal update (only our own repo). Live never:
@@ -608,6 +638,7 @@ function gbg_core_health(): array {
 			array_keys( $plugins )
 		),
 		'plugin_updates'     => $pending,
+		'update_channel'     => get_option( 'gbg_core_release_check', array() ),
 		'theme'              => wp_get_theme()->get_template() . ' ' . wp_get_theme( get_template() )->get( 'Version' ),
 	);
 }
