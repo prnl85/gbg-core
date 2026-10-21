@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.7
+ * Version: 0.3.8
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.7';
+const GBG_CORE_VERSION = '0.3.8';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -462,10 +462,55 @@ add_filter(
 	'auto_update_plugin',
 	static function ( $auto, $item ) {
 		$is_ours = isset( $item->plugin ) && 'gbg-core/gbg-core.php' === $item->plugin;
-		return ( $is_ours && false !== strpos( (string) home_url(), 'cloudwaysapps.com' ) ) ? true : $auto;
+		return ( $is_ours && gbg_core_is_staging() ) ? true : $auto;
 	},
 	10,
 	2
+);
+
+/** Staging only: the site this plugin may update itself on without a click. */
+function gbg_core_is_staging(): bool {
+	return false !== strpos( (string) home_url(), 'cloudwaysapps.com' );
+}
+
+// Staging only: POST /gbg/v1/self-update installs the newest release from the update channel right away (instead of
+// waiting for WordPress' twice-daily check). Same package check as the normal update (only our own repo). Live never:
+// there an administrator clicks Update.
+add_action(
+	'rest_api_init',
+	static function () {
+		register_rest_route(
+			'gbg/v1',
+			'/self-update',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => static fn() => gbg_core_can_manage() && gbg_core_is_staging(),
+				'callback'            => static function () {
+					delete_transient( 'gbg_core_release' );
+					$item = gbg_core_update_item( gbg_core_remote_release() );
+					if ( ! $item ) {
+						return array( 'updated' => false, 'version' => GBG_CORE_VERSION, 'reason' => 'no newer release' );
+					}
+					require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+					require_once ABSPATH . 'wp-admin/includes/plugin.php';
+					require_once ABSPATH . 'wp-admin/includes/file.php';
+					require_once ABSPATH . 'wp-admin/includes/misc.php';
+					$updates = get_site_transient( 'update_plugins' );
+					$updates = is_object( $updates ) ? $updates : new stdClass();
+					$updates->response                           = (array) ( $updates->response ?? array() );
+					$updates->response['gbg-core/gbg-core.php'] = $item;
+					set_site_transient( 'update_plugins', $updates );
+					$upgrader = new Plugin_Upgrader( new Automatic_Upgrader_Skin() );
+					$result   = $upgrader->upgrade( 'gbg-core/gbg-core.php' );
+					if ( true === $result || null === $result ) {
+						activate_plugin( 'gbg-core/gbg-core.php' );
+					}
+					return array( 'updated' => true === $result, 'from' => GBG_CORE_VERSION, 'to' => $item->new_version,
+						'messages' => array_slice( (array) $upgrader->skin->get_upgrade_messages(), -5 ) );
+				},
+			)
+		);
+	}
 );
 
 /* -------------------------------------------------------------------------

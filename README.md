@@ -34,6 +34,8 @@ New versions are published in the public repo github.com/prnl85/gbg-core (`updat
 
 Release: `scripts/release_gbg_core.sh` (branch `release-<version>` first, then `update.json` on main). 0.3.2 (21-10) was the first end-to-end test of the channel: no functional change.
 
+Staging self-update (0.3.8): `POST /wp-json/gbg/v1/self-update` (settings logins, staging host only) installs the newest release immediately; `scripts/release_gbg_core.sh` calls it after publishing. Live never updates itself.
+
 ## Health and hardening (0.1.9)
 
 `GET /wp-json/gbg/v1/health` (settings logins only): WordPress/PHP version, pending core and plugin updates, plugins with versions, DISALLOW_FILE_EDIT, debug display, number of administrators, XML-RPC. Read by `scripts/security_audit.py`.
