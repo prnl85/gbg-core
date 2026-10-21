@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.26
+ * Version: 0.3.27
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.26';
+const GBG_CORE_VERSION = '0.3.27';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -714,7 +714,7 @@ function gbg_core_health(): array {
 		'plugin_updates'     => $pending,
 		'update_channel'     => get_option( 'gbg_core_release_check', array() ),
 		'go_links'           => array_keys( (array) gbg_core_settings()['go_links'] ),
-		'ga4_mp'             => array( 'measurement_id' => gbg_core_settings()['ga4_measurement_id'], 'secret_set' => '' !== (string) get_option( 'gbg_core_ga4_secret', '' ), 'track_enabled' => gbg_core_settings()['track_enabled'] ),
+		'ga4_mp'             => array( 'measurement_id' => gbg_core_settings()['ga4_measurement_id'], 'secret_set' => '' !== (string) get_option( 'gbg_core_ga4_secret', '' ), 'track_enabled' => gbg_core_settings()['track_enabled'], 'today' => get_transient( 'gbg_core_mp_stats' ) ?: array() ),
 		'promos'             => array_map( static fn( $p ) => $p['merchant'] . ' ' . $p['code'] . ' ' . $p['until'], (array) gbg_core_settings()['promos'] ),
 		'anonymous_selftest' => gbg_core_anon_selftest(),
 		'theme'              => wp_get_theme()->get_template() . ' ' . wp_get_theme( get_template() )->get( 'Version' ),
@@ -1819,13 +1819,25 @@ function gbg_core_mp_payload( array $ids, string $name, array $params ): array {
 	return array( 'client_id' => $ids['client_id'], 'events' => array( array( 'name' => $name, 'params' => $clean ) ) );
 }
 
+// Per-day counters (event + outcome) in the health report, so a missing event can be traced without server logs.
+function gbg_core_mp_stat( string $name, string $outcome ): void {
+	$day = gmdate( 'Y-m-d' );
+	$st  = get_transient( 'gbg_core_mp_stats' );
+	$st  = is_array( $st ) && ( $st['day'] ?? '' ) === $day ? $st : array( 'day' => $day, 'n' => array() );
+	$key = $name . ':' . $outcome;
+	$st['n'][ $key ] = ( $st['n'][ $key ] ?? 0 ) + 1;
+	set_transient( 'gbg_core_mp_stats', $st, 2 * DAY_IN_SECONDS );
+}
+
 function gbg_core_mp_send( string $name, array $params ): bool {
 	$s      = gbg_core_settings();
 	$secret = (string) get_option( 'gbg_core_ga4_secret', '' );
 	$ids    = $s['track_enabled'] && $s['ga4_measurement_id'] && $secret ? gbg_core_ga_ids( $_COOKIE, $s['ga4_measurement_id'] ) : null; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 	if ( ! $ids || is_user_logged_in() ) {
+		gbg_core_mp_stat( $name, ! $ids ? 'skip_no_ga_cookie' : 'skip_logged_in' );
 		return false;
 	}
+	gbg_core_mp_stat( $name, 'sent' );
 	wp_remote_post(
 		'https://www.google-analytics.com/mp/collect?measurement_id=' . rawurlencode( $s['ga4_measurement_id'] ) . '&api_secret=' . rawurlencode( $secret ),
 		array( 'body' => wp_json_encode( gbg_core_mp_payload( $ids, $name, $params ) ), 'headers' => array( 'Content-Type' => 'application/json' ), 'timeout' => 2, 'blocking' => false )
@@ -1867,6 +1879,7 @@ add_action(
 					$b = json_decode( (string) $request->get_body(), true );
 					$n = is_array( $b ) ? (string) ( $b['n'] ?? '' ) : '';
 					if ( ! in_array( $n, array( 'affiliate_click', 'share', 'promo_copy' ), true ) ) {
+						gbg_core_mp_stat( 'ev', 'rejected' );
 						return new WP_REST_Response( null, 204 );
 					}
 					$p                  = array_intersect_key( (array) ( $b['p'] ?? array() ), array_flip( array( 'link_slug', 'link_domain', 'placement', 'ab_test', 'link_text', 'method', 'item_id', 'promo_code' ) ) );
