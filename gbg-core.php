@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.13
+ * Version: 0.3.14
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.13';
+const GBG_CORE_VERSION = '0.3.14';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -426,6 +426,17 @@ function gbg_core_update_item( array $remote ): ?object {
 	);
 }
 
+// 'Check again' on Dashboard → Updates (force-check) also refreshes our own cached release, so a new version shows at
+// once instead of after the 6-hour cache (Paul 21-10: live did not show 0.3.13).
+add_action(
+	'load-update-core.php',
+	static function () {
+		if ( isset( $_GET['force-check'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
+			delete_transient( 'gbg_core_release' );
+		}
+	}
+);
+
 function gbg_core_remote_release(): array {
 	$cached = get_transient( 'gbg_core_release' );
 	if ( is_array( $cached ) ) {
@@ -434,7 +445,7 @@ function gbg_core_remote_release(): array {
 	$response = wp_remote_get( GBG_CORE_UPDATE_JSON, array( 'timeout' => 10 ) );
 	$data     = is_wp_error( $response ) ? null : json_decode( wp_remote_retrieve_body( $response ), true );
 	$data     = is_array( $data ) ? $data : array();
-	set_transient( 'gbg_core_release', $data, 6 * HOUR_IN_SECONDS );
+	set_transient( 'gbg_core_release', $data, HOUR_IN_SECONDS );
 	return $data;
 }
 
