@@ -2,7 +2,7 @@
 /**
  * Plugin Name: GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.25
+ * Version: 0.3.26
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.25';
+const GBG_CORE_VERSION = '0.3.26';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -81,6 +81,10 @@ function gbg_core_defaults(): array {
 		// does not exist; gbgEv() falls back to the gtag command queue in dataLayer (read by the GTM Google tag) and also
 		// pushes a GTM event object (gbg_<name>) for GTM triggers.
 		'track_enabled'      => false,
+		// GA4 Measurement Protocol (0.3.26): events are sent by the server, so they arrive even when GTM ignores page
+		// commands, an ad blocker is on or the page leaves for the partner at once. The API secret is kept in its own
+		// option (Tools > GBG Core GA4), never in these settings or the REST API.
+		'ga4_measurement_id' => '',
 	);
 }
 
@@ -148,6 +152,9 @@ function gbg_core_sanitize( array $input ): array {
 	}
 	if ( array_key_exists( 'privacy_url', $input ) ) {
 		$clean['privacy_url'] = esc_url_raw( (string) $input['privacy_url'] );
+	}
+	if ( array_key_exists( 'ga4_measurement_id', $input ) ) {
+		$clean['ga4_measurement_id'] = preg_match( '/^G-[A-Z0-9]{4,15}$/', strtoupper( trim( (string) $input['ga4_measurement_id'] ) ) ) ? strtoupper( trim( (string) $input['ga4_measurement_id'] ) ) : '';
 	}
 	if ( array_key_exists( 'go_hosts', $input ) ) {
 		$hosts             = array_map( static fn( $h ) => strtolower( trim( (string) $h ) ), (array) $input['go_hosts'] );
@@ -707,6 +714,7 @@ function gbg_core_health(): array {
 		'plugin_updates'     => $pending,
 		'update_channel'     => get_option( 'gbg_core_release_check', array() ),
 		'go_links'           => array_keys( (array) gbg_core_settings()['go_links'] ),
+		'ga4_mp'             => array( 'measurement_id' => gbg_core_settings()['ga4_measurement_id'], 'secret_set' => '' !== (string) get_option( 'gbg_core_ga4_secret', '' ), 'track_enabled' => gbg_core_settings()['track_enabled'] ),
 		'promos'             => array_map( static fn( $p ) => $p['merchant'] . ' ' . $p['code'] . ' ' . $p['until'], (array) gbg_core_settings()['promos'] ),
 		'anonymous_selftest' => gbg_core_anon_selftest(),
 		'theme'              => wp_get_theme()->get_template() . ' ' . wp_get_theme( get_template() )->get( 'Version' ),
@@ -1325,6 +1333,7 @@ add_action(
 						return new WP_Error( 'gbg_lead_rate', 'Too many sign-ups, try again later.', array( 'status' => 429 ) );
 					}
 					gbg_core_lead_save( $d, $ip_hash );
+					gbg_core_mp_send( 'generate_lead', array( 'lead_magnet' => (string) ( $d['magnet']['id'] ?? '' ), 'page_location' => (string) ( $_SERVER['HTTP_REFERER'] ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 					$country = current( array_filter( $d['tags'], static fn( $t ) => 0 === strpos( $t, 'country:' ) ) );
 					return array( 'ok' => true, 'html' => gbg_core_lead_thanks_html( $d['magnet'] ), 'country' => $country ? substr( $country, 8 ) : '' );
 				},
@@ -1743,6 +1752,7 @@ add_action(
 		header( 'X-Robots-Tag: noindex, nofollow' );
 		header( 'Cache-Control: no-store, private' );
 		header( 'X-GBG-Go: 1' );
+		gbg_core_go_track( $target );
 		wp_redirect( $target, 302, 'GoBackpackGo' ); // phpcs:ignore WordPress.Security.SafeRedirect -- targets are allowlisted
 		exit;
 	},
@@ -1767,18 +1777,132 @@ function gbg_core_track_config(): array {
 }
 
 function gbg_core_track_script(): string {
-	return '<script id="gbg-track">(function(c){window.gbgEv=function(n,p){p=p||{};window.dataLayer=window.dataLayer||[];'
-		. 'if(window.gtag){gtag("event",n,p)}else{(function(){dataLayer.push(arguments)})("event",n,p)}'
-		. 'var o={event:"gbg_"+n};for(var k in p)o[k]=p[k];dataLayer.push(o)};'
+	$cfg = gbg_core_track_config() + array( 'u' => esc_url_raw( rest_url( 'gbg/v1/ev' ) ) );
+	return '<script id="gbg-track">(function(c){window.gbgEv=function(n,p){p=p||{};window.dataLayer=window.dataLayer||[];var o={event:"gbg_"+n};for(var k in p)o[k]=p[k];dataLayer.push(o);'
+		. 'try{navigator.sendBeacon(c.u,JSON.stringify({n:n,p:p,l:location.href}))}catch(x){}};'
 		. 'document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href]");if(!a)return;var u;try{u=new URL(a.href,location.href)}catch(x){return}'
 		. 'var m=u.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2,4})?\/)?go\/([a-z0-9-]+)/i),slug=m?m[1].toLowerCase():"",host=u.hostname.replace(/^www\./,"").toLowerCase();'
 		. 'if(slug){if(u.hostname!==location.hostname)return;host=c.g[slug]||"go"}else if(!c.h.some(function(h){return host===h||host.slice(-h.length-1)==="."+h}))return;'
 		. 'var ab=a.closest("[data-gbg-ab]"),pl=a.closest(".gbg-promo")?"promo":ab?"ab":a.closest("footer,.l-footer")?"footer":a.closest("header,.l-header")?"header":'
-		. 'a.closest(".gbg-sticky,.w-sticky,[class*=sticky]")?"sticky":/\bw-btn\b|button/.test(a.className)?"button":"content";'
-		. 'gbgEv("affiliate_click",{link_slug:slug||host,link_domain:host,placement:pl,ab_test:ab?ab.getAttribute("data-gbg-ab"):"",'
-		. 'link_text:(a.textContent||a.getAttribute("aria-label")||"").replace(/\s+/g," ").trim().slice(0,80),transport_type:"beacon"})},true)})('
-		. wp_json_encode( gbg_core_track_config() ) . ');</script>';
+		. 'a.closest(".gbg-sticky,.w-sticky,[class*=sticky]")?"sticky":/\bw-btn\b|button/.test(a.className)?"button":"content",'
+		. 'p={link_slug:slug||host,link_domain:host,placement:pl,ab_test:ab?ab.getAttribute("data-gbg-ab"):"",link_text:(a.textContent||a.getAttribute("aria-label")||"").replace(/\s+/g," ").trim().slice(0,80)};'
+		// /go/ links are counted by the server on the redirect (reliable); the page only hands over where the click was.
+		. 'if(slug){document.cookie="gbg_pl="+encodeURIComponent([p.placement,p.ab_test,p.link_text,location.href].join("|"))+";path=/;max-age=60;SameSite=Lax";'
+		. 'var o={event:"gbg_affiliate_click"};for(var k in p)o[k]=p[k];(window.dataLayer=window.dataLayer||[]).push(o)}else{gbgEv("affiliate_click",p)}},true)})('
+		. wp_json_encode( $cfg ) . ');</script>';
 }
+
+/** GA4 client and session id from the visitor's own GA cookies; null without consent/cookie (bots, opt-out). */
+function gbg_core_ga_ids( array $cookies, string $measurement_id ): ?array {
+	if ( ! preg_match( '/^GA\d\.\d\.(\d+\.\d+)$/', (string) ( $cookies['_ga'] ?? '' ), $m ) ) {
+		return null;
+	}
+	$session = '';
+	$sc      = (string) ( $cookies[ '_ga_' . substr( $measurement_id, 2 ) ] ?? '' );
+	if ( preg_match( '/^GS2\.\d\.s(\d+)/', $sc, $s ) || preg_match( '/^GS1\.\d\.(\d+)\./', $sc, $s ) ) {
+		$session = $s[1];
+	}
+	return array( 'client_id' => $m[1], 'session_id' => $session );
+}
+
+function gbg_core_mp_payload( array $ids, string $name, array $params ): array {
+	$clean = array();
+	foreach ( $params as $k => $v ) {
+		if ( preg_match( '/^[a-z_]{1,40}$/', (string) $k ) && is_scalar( $v ) ) {
+			$clean[ $k ] = substr( sanitize_text_field( (string) $v ), 0, 100 );
+		}
+	}
+	$clean['engagement_time_msec'] = 1;
+	if ( '' !== $ids['session_id'] ) {
+		$clean['session_id'] = $ids['session_id'];
+	}
+	return array( 'client_id' => $ids['client_id'], 'events' => array( array( 'name' => $name, 'params' => $clean ) ) );
+}
+
+function gbg_core_mp_send( string $name, array $params ): bool {
+	$s      = gbg_core_settings();
+	$secret = (string) get_option( 'gbg_core_ga4_secret', '' );
+	$ids    = $s['track_enabled'] && $s['ga4_measurement_id'] && $secret ? gbg_core_ga_ids( $_COOKIE, $s['ga4_measurement_id'] ) : null; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+	if ( ! $ids || is_user_logged_in() ) {
+		return false;
+	}
+	wp_remote_post(
+		'https://www.google-analytics.com/mp/collect?measurement_id=' . rawurlencode( $s['ga4_measurement_id'] ) . '&api_secret=' . rawurlencode( $secret ),
+		array( 'body' => wp_json_encode( gbg_core_mp_payload( $ids, $name, $params ) ), 'headers' => array( 'Content-Type' => 'application/json' ), 'timeout' => 2, 'blocking' => false )
+	);
+	return true;
+}
+
+// /go/<slug>/: the click the page described in the gbg_pl cookie (placement|ab_test|text|page), or the referrer.
+function gbg_core_go_track( string $target ): void {
+	$slug = '';
+	if ( preg_match( '#/go/([a-z0-9-]+)#', strtolower( (string) wp_parse_url( $_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH ) ), $m ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+		$slug = $m[1];
+	}
+	$pl = explode( '|', (string) wp_unslash( $_COOKIE['gbg_pl'] ?? '' ), 4 ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+	gbg_core_mp_send(
+		'affiliate_click',
+		array(
+			'link_slug'     => $slug,
+			'link_domain'   => preg_replace( '/^www\./', '', strtolower( (string) wp_parse_url( $target, PHP_URL_HOST ) ) ),
+			'placement'     => $pl[0] ?? '' ?: 'unknown',
+			'ab_test'       => $pl[1] ?? '',
+			'link_text'     => $pl[2] ?? '',
+			'page_location' => ( $pl[3] ?? '' ) ?: (string) ( $_SERVER['HTTP_REFERER'] ?? '' ), // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+			'link_url'      => $target,
+		)
+	);
+}
+
+add_action(
+	'rest_api_init',
+	static function () {
+		register_rest_route(
+			'gbg/v1',
+			'/ev',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => '__return_true',
+				'callback'            => static function ( WP_REST_Request $request ) {
+					$b = json_decode( (string) $request->get_body(), true );
+					$n = is_array( $b ) ? (string) ( $b['n'] ?? '' ) : '';
+					if ( ! in_array( $n, array( 'affiliate_click', 'share', 'promo_copy' ), true ) ) {
+						return new WP_REST_Response( null, 204 );
+					}
+					$p                  = array_intersect_key( (array) ( $b['p'] ?? array() ), array_flip( array( 'link_slug', 'link_domain', 'placement', 'ab_test', 'link_text', 'method', 'item_id', 'promo_code' ) ) );
+					$p['page_location'] = (string) ( $b['l'] ?? '' );
+					gbg_core_mp_send( $n, $p );
+					return new WP_REST_Response( null, 204 );
+				},
+			)
+		);
+	}
+);
+
+// Tools > GBG Core GA4: the Measurement Protocol API secret, typed in by an administrator (never shown again).
+add_action(
+	'admin_menu',
+	static function () {
+		add_management_page(
+			'GBG Core GA4',
+			'GBG Core GA4',
+			'manage_options',
+			'gbg-core-ga4',
+			static function () {
+				if ( isset( $_POST['gbg_ga4_secret'] ) && check_admin_referer( 'gbg_ga4' ) ) {
+					update_option( 'gbg_core_ga4_secret', sanitize_text_field( wp_unslash( $_POST['gbg_ga4_secret'] ) ), false ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+					echo '<div class="notice notice-success"><p>Saved.</p></div>';
+				}
+				$s = gbg_core_settings();
+				echo '<div class="wrap"><h1>GBG Core GA4</h1><p>Measurement ID: <code>' . esc_html( $s['ga4_measurement_id'] ?: 'not set' ) . '</code> &middot; tracking '
+					. ( $s['track_enabled'] ? 'on' : 'off' ) . ' &middot; API secret ' . ( get_option( 'gbg_core_ga4_secret' ) ? 'saved' : 'not set' ) . '</p>'
+					. '<form method="post">' . wp_nonce_field( 'gbg_ga4', '_wpnonce', true, false )
+					. '<p><label>Measurement Protocol API secret<br><input type="password" name="gbg_ga4_secret" class="regular-text" autocomplete="off"></label></p>'
+					. '<p><button class="button button-primary">Save</button></p></form></div>'; // phpcs:ignore WordPress.Security.EscapeOutput
+			}
+		);
+	}
+);
 
 add_action(
 	'wp_head',
