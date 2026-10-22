@@ -59,6 +59,9 @@ Kill switch `leads_enabled` (default off). `lead_magnets`: id, title, pitch, but
 - 0.3.48: install steps as three short numbered cards (`ol.gbg-esim-steps`), stylesheet also printed with the checked date.
 - Setting `esim_faq_fix`: replaces the Afghan city list in the generated coverage FAQ (not on the Afghanistan page).
 
+## Nearby links (0.3.49)
+- `GET/POST /gbg/v1/nearby` stores per page slug a heading and up to 8 links (own relative paths only), built by `scripts/nearby_links.py` from `config/car-rental-regions.json`. Setting `nearby_enabled` appends them as a short section at the end of the main content; off removes them everywhere.
+
 ## Build, test, install
 
 - Test: `php wordpress/tests/gbg-core-test.php <dir with WordPress wp-includes/html-api files + class-wp-token-map.php>`

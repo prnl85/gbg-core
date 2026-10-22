@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.48
+ * Version: 0.3.49
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.48';
+const GBG_CORE_VERSION = '0.3.49';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -103,6 +103,8 @@ function gbg_core_defaults(): array {
 		'baidu_limit'        => false,
 		// 0.3.46: replace the Afghan city list in the coverage FAQ of the generated eSIM country pages.
 		'esim_faq_fix'       => false,
+		// 0.3.49: short 'nearby' section (city <-> airport <-> hub) at the end of cluster pages, data via /gbg/v1/nearby.
+		'nearby_enabled'     => false,
 	);
 }
 
@@ -117,7 +119,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -2935,6 +2937,105 @@ add_action(
 							'pages'   => count( $d['pages'] ),
 							'devices' => array_sum( array_map( static fn( $g ) => count( $g['models'] ), $d['devices'] ) ),
 						);
+					},
+				),
+			)
+		);
+	}
+);
+
+/* -------------------------------------------------------------------------
+ * 'Nearby' links on cluster pages (0.3.49, Paul 22-10: city <-> airport <-> hub). Data per page slug from
+ * scripts/nearby_links.py via POST /gbg/v1/nearby: a heading and a few links (own pages only, relative paths).
+ * Setting nearby_enabled shows them as a short section at the end of the main content; off = gone everywhere.
+ * ---------------------------------------------------------------------- */
+
+const GBG_CORE_NEARBY_OPTION = 'gbg_core_nearby';
+
+function gbg_core_nearby_sanitize( array $in ): array {
+	$out = array();
+	foreach ( array_slice( (array) ( $in['pages'] ?? array() ), 0, 5000, true ) as $slug => $p ) {
+		$p = (array) $p;
+		if ( '' === (string) $slug || sanitize_title( (string) $slug ) !== (string) $slug ) {
+			continue;
+		}
+		$links = array();
+		foreach ( array_slice( (array) ( $p['links'] ?? array() ), 0, 8 ) as $l ) {
+			$l    = (array) $l;
+			$path = (string) ( $l['path'] ?? '' );
+			$text = substr( sanitize_text_field( (string) ( $l['label'] ?? '' ) ), 0, 120 );
+			if ( preg_match( '#^/[a-z0-9/-]{1,150}/$#', $path ) && '' !== $text ) {
+				$links[] = array( 'path' => $path, 'label' => $text, 'note' => substr( sanitize_text_field( (string) ( $l['note'] ?? '' ) ), 0, 120 ) );
+			}
+		}
+		$title = substr( sanitize_text_field( (string) ( $p['title'] ?? '' ) ), 0, 100 );
+		if ( $links && '' !== $title ) {
+			$out[ (string) $slug ] = array( 'title' => $title, 'links' => $links );
+		}
+	}
+	return $out;
+}
+
+function gbg_core_nearby_html( array $p ): string {
+	$items = '';
+	foreach ( $p['links'] as $l ) {
+		$items .= '<li><a href="' . esc_url( home_url( $l['path'] ) ) . '">' . esc_html( $l['label'] ) . '</a>'
+			. ( '' !== $l['note'] ? ' <span>' . esc_html( $l['note'] ) . '</span>' : '' ) . '</li>';
+	}
+	return '<section class="gbg-nearby" style="margin:2em 0;padding:1.2em 1.4em;border-radius:10px;background:rgba(140,198,63,.10)">'
+		. '<h2 style="font-size:1.35em;margin:0 0 .5em">' . esc_html( $p['title'] ) . '</h2><ul style="margin:0">' . $items . '</ul></section>';
+}
+
+add_filter(
+	'the_content',
+	static function ( $content ) {
+		static $done = false;
+		if ( $done || ! is_string( $content ) || empty( gbg_core_settings()['nearby_enabled'] ) || is_admin() || is_feed() || ! is_singular()
+			|| ( defined( 'REST_REQUEST' ) && REST_REQUEST ) || str_contains( $content, 'class="gbg-nearby"' ) ) {
+			return $content;
+		}
+		$id = (int) get_the_ID();
+		if ( $id !== (int) get_queried_object_id() ) {
+			return $content;
+		}
+		$data = get_option( GBG_CORE_NEARBY_OPTION, array() );
+		$p    = is_array( $data ) ? ( $data[ (string) get_post_field( 'post_name', $id ) ] ?? null ) : null;
+		if ( ! $p ) {
+			return $content;
+		}
+		$done = true;
+		return $content . gbg_core_nearby_html( $p );
+	},
+	30
+);
+
+add_action(
+	'rest_api_init',
+	static function () {
+		register_rest_route(
+			'gbg/v1',
+			'/nearby',
+			array(
+				array(
+					'methods'             => 'GET',
+					'permission_callback' => 'gbg_core_can_manage',
+					'callback'            => static function () {
+						$d = get_option( GBG_CORE_NEARBY_OPTION, array() );
+						return array( 'pages' => is_array( $d ) ? count( $d ) : 0, 'enabled' => (bool) gbg_core_settings()['nearby_enabled'] );
+					},
+				),
+				array(
+					'methods'             => 'POST',
+					'permission_callback' => 'gbg_core_can_manage',
+					'callback'            => static function ( WP_REST_Request $request ) {
+						$in = $request->get_json_params();
+						if ( ! is_array( $in ) ) {
+							return new WP_Error( 'gbg_core_bad_body', 'Send a JSON object.', array( 'status' => 400 ) );
+						}
+						$d = gbg_core_nearby_sanitize( $in );
+						update_option( GBG_CORE_NEARBY_OPTION, $d, false );
+						do_action( 'breeze_clear_all_cache' );
+						return array( 'pages' => count( $d ) );
 					},
 				),
 			)
