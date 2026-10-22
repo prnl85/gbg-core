@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.49
+ * Version: 0.3.50
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.49';
+const GBG_CORE_VERSION = '0.3.50';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -2980,10 +2980,12 @@ function gbg_core_nearby_html( array $p ): string {
 	$items = '';
 	foreach ( $p['links'] as $l ) {
 		$items .= '<li><a href="' . esc_url( home_url( $l['path'] ) ) . '">' . esc_html( $l['label'] ) . '</a>'
-			. ( '' !== $l['note'] ? ' <span>' . esc_html( $l['note'] ) . '</span>' : '' ) . '</li>';
+			. ( '' !== $l['note'] ? ' <span style="opacity:.7">· ' . esc_html( $l['note'] ) . '</span>' : '' ) . '</li>';
 	}
-	return '<section class="gbg-nearby" style="margin:2em 0;padding:1.2em 1.4em;border-radius:10px;background:rgba(140,198,63,.10)">'
-		. '<h2 style="font-size:1.35em;margin:0 0 .5em">' . esc_html( $p['title'] ) . '</h2><ul style="margin:0">' . $items . '</ul></section>';
+	// Own gutter: many cluster pages use full-width rows without side padding (0.3.50).
+	return '<div class="gbg-nearby-wrap" style="padding:0 16px"><section class="gbg-nearby" style="box-sizing:border-box;max-width:1140px;margin:2em auto;'
+		. 'padding:1.2em 1.4em;border-radius:10px;background:rgba(140,198,63,.10)"><h2 style="font-size:1.35em;margin:0 0 .5em">'
+		. esc_html( $p['title'] ) . '</h2><ul style="margin:0;padding-left:1.2em">' . $items . '</ul></section></div>';
 }
 
 add_filter(
