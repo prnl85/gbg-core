@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.33
+ * Version: 0.3.34
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.33';
+const GBG_CORE_VERSION = '0.3.34';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1744,7 +1744,18 @@ add_action(
 		}
 		$post_id = (int) get_queried_object_id();
 		$slugs   = array_keys( (array) $s['go_links'] );
-		ob_start( static fn( $html ) => ( is_string( $html ) && '' !== $html ) ? gbg_core_go_page_links( $html, $post_id, $slugs ) : $html );
+		$country = (string) ( $s['go_pages'][ (string) get_post_field( 'post_name', $post_id ) ] ?? '' );
+		$cslugs  = array_keys( (array) $s['go_country'] );
+		ob_start(
+			static function ( $html ) use ( $post_id, $slugs, $country, $cslugs ) {
+				if ( ! is_string( $html ) || '' === $html ) {
+					return $html;
+				}
+				// Links outside the content (sticky button, footer) get the page's country too, then every /go/ link the page ID.
+				$html = $country ? gbg_core_go_country_links( $html, $country, $post_id, $cslugs ) : $html;
+				return gbg_core_go_page_links( $html, $post_id, $slugs );
+			}
+		);
 	},
 	20
 );
