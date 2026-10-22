@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.46
+ * Version: 0.3.47
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.46';
+const GBG_CORE_VERSION = '0.3.47';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -2721,6 +2721,20 @@ function gbg_core_esim_date( string $ymd ): string {
 	return $t ? gmdate( 'j F Y', $t ) : '';
 }
 
+/** Small stylesheet for the eSIM blocks, printed once with the first eSIM shortcode on the page (0.3.47). */
+function gbg_core_esim_css(): string {
+	static $done = false;
+	if ( $done ) {
+		return '';
+	}
+	$done = true;
+	return '<style id="gbg-esim-css">.gbg-esim-price{background:#f3f8ea;border-left:4px solid #8cc63f;border-radius:6px;padding:.8em 1em;font-size:1.1em}'
+		. '.gbg-esim-checked{display:block;font-size:.8em;opacity:.75}.gbg-esim-steps li{margin-bottom:.6em}'
+		. '.gbg-esim-devices{margin:1em 0}.gbg-esim-devices details{border-bottom:1px solid rgba(0,0,0,.12);padding:.55em 0}'
+		. '.gbg-esim-devices summary{cursor:pointer;font-weight:600}.gbg-esim-devices summary span{font-weight:400;opacity:.7}'
+		. '.gbg-esim-devices details p{margin:.5em 0 .2em}</style>';
+}
+
 function gbg_core_euro( float $v ): string {
 	return '€' . number_format( $v, 2, '.', ',' );
 }
@@ -2737,7 +2751,7 @@ add_shortcode(
 		$main = $p['day'] ? gbg_core_euro( $p['day'] ) . ' per day' : gbg_core_euro( $p['gb'] ) . ' per GB';
 		$alt  = $p['day'] && $p['gb'] ? ' (or ' . gbg_core_euro( $p['gb'] ) . ' per GB)' : '';
 		$for  = $p['country'] ? ' for ' . esc_html( $p['country'] ) : '';
-		return '<p class="gbg-esim-price">eSIM' . $for . ' from <strong>' . esc_html( $main ) . '</strong>' . esc_html( $alt )
+		return gbg_core_esim_css() . '<p class="gbg-esim-price">eSIM' . $for . ' from <strong>' . esc_html( $main ) . '</strong>' . esc_html( $alt )
 			. ' at Yesim <span class="gbg-esim-checked">(price checked ' . esc_html( gbg_core_esim_date( $d['checked'] ) ) . ')</span></p>';
 	}
 );
@@ -2762,9 +2776,11 @@ add_shortcode(
 		if ( empty( $d['devices'] ) ) {
 			return '';
 		}
-		$html = '<div class="gbg-esim-devices">';
+		// One closed <details> per brand: short on a phone, and the full list stays in the HTML for search engines.
+		$html = gbg_core_esim_css() . '<div class="gbg-esim-devices">';
 		foreach ( $d['devices'] as $g ) {
-			$html .= '<p><strong>' . esc_html( $g['group'] ) . ':</strong> ' . esc_html( implode( ', ', $g['models'] ) ) . '</p>';
+			$html .= '<details><summary>' . esc_html( $g['group'] ) . ' <span>(' . count( $g['models'] ) . ' models)</span></summary><p>'
+				. esc_html( implode( ', ', $g['models'] ) ) . '</p></details>';
 		}
 		return $html . '</div>';
 	}
