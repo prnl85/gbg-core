@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.36
+ * Version: 0.3.37
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.36';
+const GBG_CORE_VERSION = '0.3.37';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -89,6 +89,9 @@ function gbg_core_defaults(): array {
 		// commands, an ad blocker is on or the page leaves for the partner at once. The API secret is kept in its own
 		// option (Tools > GBG Core GA4), never in these settings or the REST API.
 		'ga4_measurement_id' => '',
+		// Speed (0.3.37, mobile LCP): serve the WebP copies Imagify already made (<file>.jpg.webp) for own uploads in
+		// <img src/srcset> and CSS backgrounds, and preload the first background image (the hero) with high priority.
+		'webp_enabled'       => false,
 	);
 }
 
@@ -103,7 +106,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -1766,6 +1769,49 @@ add_action(
 		);
 	},
 	20
+);
+
+// WebP copies (Imagify writes <file>.<ext>.webp next to the original) for own uploads; $exists decides per file.
+function gbg_core_webp_html( string $html, string $base, callable $exists ): string {
+	$rx  = '#' . preg_quote( rtrim( $base, '/' ), '#' ) . '/[^"\'\s(),]+?\.(?:jpe?g|png)(?=["\'\s),])#i';
+	$map = array();
+	$html = (string) preg_replace_callback(
+		$rx,
+		static function ( $m ) use ( $exists, &$map ) {
+			if ( ! isset( $map[ $m[0] ] ) ) {
+				$map[ $m[0] ] = $exists( $m[0] . '.webp' ) ? $m[0] . '.webp' : $m[0];
+			}
+			return $map[ $m[0] ];
+		},
+		$html
+	);
+	// The hero is a CSS background, which the browser finds late: preload the first one with high priority.
+	if ( preg_match( '#background-image:\s*url\(\s*["\']?(' . preg_quote( rtrim( $base, '/' ), '#' ) . '/[^"\')]+)#i', $html, $m ) && ! str_contains( $html, 'rel="preload" as="image"' ) ) {
+		$link = '<link rel="preload" as="image" href="' . esc_url( $m[1] ) . '" fetchpriority="high">';
+		$html = (string) preg_replace( '#</title>#i', '</title>' . $link, $html, 1 );
+	}
+	return $html;
+}
+
+add_action(
+	'template_redirect',
+	static function () {
+		if ( ! gbg_core_settings()['webp_enabled'] || is_admin() || is_feed() || wp_doing_ajax() ) {
+			return;
+		}
+		$up = wp_get_upload_dir();
+		ob_start(
+			static function ( $html ) use ( $up ) {
+				if ( ! is_string( $html ) || '' === $html || ! str_contains( $html, '</title>' ) ) {
+					return $html;
+				}
+				$base = (string) $up['baseurl'];
+				$dir  = (string) $up['basedir'];
+				return gbg_core_webp_html( $html, $base, static fn( $url ) => is_file( $dir . substr( $url, strlen( $base ) ) ) );
+			}
+		);
+	},
+	21
 );
 
 // Generated pages that still carry the template placeholder host (https://yourwebsite.com/go/...) point to our own /go/.
