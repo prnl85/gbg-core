@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.43
+ * Version: 0.3.44
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.43';
+const GBG_CORE_VERSION = '0.3.44';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -2522,7 +2522,7 @@ add_filter(
 	static function ( $output ) {
 		return gbg_core_settings()['baidu_limit'] ? rtrim( (string) $output ) . "\n" . gbg_core_baidu_robots() : $output;
 	},
-	99999
+	PHP_INT_MAX // Yoast rebuilds the whole file at 99999; append after it
 );
 
 // /favicon.ico: WordPress answers every request with a 302 to the site icon (5k a day, each a PHP run). Serve a small
