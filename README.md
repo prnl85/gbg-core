@@ -56,6 +56,7 @@ Kill switch `leads_enabled` (default off). `lead_magnets`: id, title, pitch, but
 - `GET/POST /gbg/v1/page-block` reads or writes a shared Impreza block (`us_page_block`, `wp_block`): content, `used_by` (published pages that include it), backups. A write keeps the previous content (last 10); `expect_modified` refuses a write when the block changed in between. `POST /gbg/v1/page-block/restore {id, at}` puts a backup back.
 - `GET/POST /gbg/v1/esim-data`: from-prices per eSIM page slug and the compatible-device list, sent by the weekly Yesim check. Shortcodes `[gbg_esim_price]`, `[gbg_esim_devices]`, `[gbg_esim_checked format="day|month"]` show them; nothing is shown without data.
 - 0.3.47: devices as one closed `<details>` per brand (with the model count), small stylesheet printed once with the first eSIM shortcode.
+- 0.3.48: install steps as three short numbered cards (`ol.gbg-esim-steps`), stylesheet also printed with the checked date.
 - Setting `esim_faq_fix`: replaces the Afghan city list in the generated coverage FAQ (not on the Afghanistan page).
 
 ## Build, test, install

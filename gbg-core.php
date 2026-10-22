@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.47
+ * Version: 0.3.48
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.47';
+const GBG_CORE_VERSION = '0.3.48';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -2729,7 +2729,11 @@ function gbg_core_esim_css(): string {
 	}
 	$done = true;
 	return '<style id="gbg-esim-css">.gbg-esim-price{background:#f3f8ea;border-left:4px solid #8cc63f;border-radius:6px;padding:.8em 1em;font-size:1.1em}'
-		. '.gbg-esim-checked{display:block;font-size:.8em;opacity:.75}.gbg-esim-steps li{margin-bottom:.6em}'
+		. '.gbg-esim-checked{display:block;font-size:.8em;opacity:.75}'
+		. '.gbg-esim-steps{list-style:none;counter-reset:gbgs;padding:0;margin:1em 0;display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}'
+		. '.gbg-esim-steps li{counter-increment:gbgs;position:relative;margin:0;padding:14px 14px 14px 58px;border-radius:10px;background:rgba(140,198,63,.12)}'
+		. '.gbg-esim-steps li:before{content:counter(gbgs);position:absolute;left:14px;top:14px;width:32px;height:32px;line-height:32px;border-radius:50%;background:#8cc63f;color:#fff;font-weight:700;text-align:center}'
+		. '.gbg-esim-steps strong{display:block}'
 		. '.gbg-esim-devices{margin:1em 0}.gbg-esim-devices details{border-bottom:1px solid rgba(0,0,0,.12);padding:.55em 0}'
 		. '.gbg-esim-devices summary{cursor:pointer;font-weight:600}.gbg-esim-devices summary span{font-weight:400;opacity:.7}'
 		. '.gbg-esim-devices details p{margin:.5em 0 .2em}</style>';
@@ -2765,7 +2769,7 @@ add_shortcode(
 			return '';
 		}
 		$t = strtotime( $d['checked'] . ' 12:00:00 UTC' );
-		return esc_html( 'month' === $atts['format'] ? gmdate( 'F Y', $t ) : gbg_core_esim_date( $d['checked'] ) );
+		return gbg_core_esim_css() . esc_html( 'month' === $atts['format'] ? gmdate( 'F Y', $t ) : gbg_core_esim_date( $d['checked'] ) );
 	}
 );
 
