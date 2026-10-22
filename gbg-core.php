@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.37
+ * Version: 0.3.38
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.37';
+const GBG_CORE_VERSION = '0.3.38';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1812,6 +1812,74 @@ add_action(
 		);
 	},
 	21
+);
+
+// Theme speed settings (0.3.38): read and change only the Impreza options about assets, icons, fonts and scripts, so
+// they can be tested on staging without the admin screen. Every change keeps the previous values for a rollback.
+function gbg_core_theme_perf_key( string $key ): bool {
+	return (bool) preg_match( '/optimi[sz]e|assets|^icons_|jquery|gfont|font_display|lazy|preload|defer|ajax_load|block_editor|emoji|dashicons|migrate/i', $key );
+}
+
+function gbg_core_theme_perf_changes( array $current, array $input ): array {
+	$out = array();
+	foreach ( $input as $k => $v ) {
+		$k = (string) $k;
+		if ( gbg_core_theme_perf_key( $k ) && array_key_exists( $k, $current ) && is_scalar( $v ) && is_scalar( $current[ $k ] ) ) {
+			$out[ $k ] = is_int( $current[ $k ] ) ? (int) $v : ( is_bool( $current[ $k ] ) ? (bool) $v : sanitize_text_field( (string) $v ) );
+		}
+	}
+	return $out;
+}
+
+add_action(
+	'rest_api_init',
+	static function () {
+		register_rest_route(
+			'gbg/v1',
+			'/theme-perf',
+			array(
+				array(
+					'methods'             => 'GET',
+					'permission_callback' => 'gbg_core_can_manage',
+					'callback'            => static function () {
+						$opt = (array) get_option( 'usof_options_' . get_template(), array() );
+						$fn  = array_values( array_filter( get_defined_functions()['user'], static fn( $f ) => (bool) preg_match( '/^us.*(asset|optimi[sz]|css_file|generate)/', $f ) ) );
+						return array(
+							'theme'     => get_template(),
+							'options'   => array_filter( $opt, static fn( $v, $k ) => gbg_core_theme_perf_key( (string) $k ) && is_scalar( $v ), ARRAY_FILTER_USE_BOTH ),
+							'functions' => $fn,
+							'backup'    => get_option( 'gbg_core_theme_backup', array() ),
+						);
+					},
+				),
+				array(
+					'methods'             => 'POST',
+					'permission_callback' => 'gbg_core_can_manage',
+					'callback'            => static function ( WP_REST_Request $request ) {
+						$name    = 'usof_options_' . get_template();
+						$opt     = (array) get_option( $name, array() );
+						$changes = gbg_core_theme_perf_changes( $opt, (array) $request->get_json_params() );
+						if ( ! $changes ) {
+							return new WP_Error( 'gbg_nothing', 'No known theme speed option in the request', array( 'status' => 400 ) );
+						}
+						$backup = (array) get_option( 'gbg_core_theme_backup', array() );
+						foreach ( $changes as $k => $v ) {
+							$backup[ $k ] = $backup[ $k ] ?? $opt[ $k ]; // the value before the first change, so a rollback goes all the way back
+						}
+						update_option( 'gbg_core_theme_backup', $backup, false );
+						update_option( $name, array_merge( $opt, $changes ) );
+						// Impreza writes its combined asset files when options are saved in the admin; do the same here.
+						foreach ( array( 'us_generate_asset_files', 'usof_save_assets', 'us_update_asset_files' ) as $fn ) {
+							if ( function_exists( $fn ) ) {
+								$fn();
+							}
+						}
+						return array( 'changed' => $changes, 'backup' => $backup );
+					},
+				),
+			)
+		);
+	}
 );
 
 // Generated pages that still carry the template placeholder host (https://yourwebsite.com/go/...) point to our own /go/.
