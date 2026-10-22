@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.31
+ * Version: 0.3.32
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.31';
+const GBG_CORE_VERSION = '0.3.32';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1936,6 +1936,7 @@ function gbg_core_go_track( string $target ): void {
 		$slug = $m[1];
 	}
 	$pl = explode( '|', (string) wp_unslash( $_COOKIE['gbg_pl'] ?? '' ), 4 ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+	gbg_core_go_count( $slug, ( $pl[0] ?? '' ) ?: 'unknown' );
 	gbg_core_mp_send(
 		'affiliate_click',
 		array(
@@ -1974,6 +1975,9 @@ add_action(
 					}
 					set_transient( $rl, $rn + 1, 10 * MINUTE_IN_SECONDS );
 					$p                  = array_intersect_key( (array) ( $b['p'] ?? array() ), array_flip( array( 'link_slug', 'link_domain', 'placement', 'ab_test', 'link_text', 'method', 'item_id', 'promo_code' ) ) );
+					if ( 'affiliate_click' === $n ) {
+						gbg_core_go_count( (string) ( $p['link_slug'] ?? '' ), (string) ( $p['placement'] ?? '' ) ?: 'unknown' );
+					}
 					$p['page_location'] = gbg_core_own_url( (string) ( $b['l'] ?? '' ), (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
 					gbg_core_mp_send( $n, $p );
 					return new WP_REST_Response( null, 204 );
@@ -2034,7 +2038,7 @@ add_action(
 				'methods'             => 'POST',
 				'permission_callback' => 'gbg_core_can_manage',
 				'callback'            => static function ( WP_REST_Request $request ) {
-					$hosts = array_merge( (array) gbg_core_settings()['go_hosts'], array( 'discovercars.com', 'yesim.app', 'ye-sim.app', 'yesim.tech', 'airalo.com', 'airhelp.com' ) );
+					$hosts = array_merge( (array) gbg_core_settings()['go_hosts'], array( 'discovercars.com', 'yesim.app', 'ye-sim.app', 'yesim.tech', 'airalo.com', 'airhelp.com', 'klook.com', 'getyourguide.com' ) );
 					$out   = array();
 					foreach ( array_slice( (array) ( $request->get_json_params()['urls'] ?? array() ), 0, 20 ) as $url ) {
 						$url  = (string) $url;
@@ -2050,6 +2054,62 @@ add_action(
 						usleep( 400000 );
 					}
 					return array( 'results' => $out );
+				},
+			)
+		);
+	}
+);
+
+/* -------------------------------------------------------------------------
+ * Anonymous click counter (0.3.32, Paul 22-10): every affiliate click per day, link and placement, also from visitors
+ * who decline cookies. No cookies, no IP, no page, no user: only "2026-10-22 / rentalcars / button: 3". Bots (by user
+ * agent) are left out. Kept 120 days. GET /gbg/v1/go-stats?days=30 for the dashboard.
+ * ---------------------------------------------------------------------- */
+
+function gbg_core_is_bot( string $ua ): bool {
+	return '' === trim( $ua ) || (bool) preg_match( '/bot|crawl|spider|slurp|preview|fetch|curl|wget|python|java\/|go-http|headless|phantom|lighthouse|monitor|scanner|facebookexternalhit|embedly|whatsapp/i', $ua );
+}
+
+/** Adds one click to the counts array ({day: {slug|placement: n}}), dropping days older than $keep_days. Pure. */
+function gbg_core_go_count_add( array $counts, string $day, string $slug, string $placement, int $keep_days = 120 ): array {
+	$slug      = preg_replace( '/[^a-z0-9.-]/', '', strtolower( $slug ) );
+	$placement = preg_replace( '/[^a-z]/', '', strtolower( $placement ) );
+	if ( '' === $slug ) {
+		return $counts;
+	}
+	$key                    = substr( $slug, 0, 60 ) . '|' . ( substr( $placement, 0, 20 ) ?: 'unknown' );
+	$counts[ $day ][ $key ] = ( $counts[ $day ][ $key ] ?? 0 ) + 1;
+	$cut                    = gmdate( 'Y-m-d', strtotime( $day . ' 12:00:00 UTC' ) - $keep_days * 86400 );
+	foreach ( array_keys( $counts ) as $d ) {
+		if ( $d < $cut ) {
+			unset( $counts[ $d ] );
+		}
+	}
+	return $counts;
+}
+
+function gbg_core_go_count( string $slug, string $placement ): void {
+	if ( is_user_logged_in() || gbg_core_is_bot( (string) ( $_SERVER['HTTP_USER_AGENT'] ?? '' ) ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+		return;
+	}
+	$counts = get_option( 'gbg_core_go_counts', array() );
+	update_option( 'gbg_core_go_counts', gbg_core_go_count_add( is_array( $counts ) ? $counts : array(), gmdate( 'Y-m-d' ), $slug, $placement ), false );
+}
+
+add_action(
+	'rest_api_init',
+	static function () {
+		register_rest_route(
+			'gbg/v1',
+			'/go-stats',
+			array(
+				'methods'             => 'GET',
+				'permission_callback' => 'gbg_core_can_manage',
+				'callback'            => static function ( WP_REST_Request $request ) {
+					$days   = max( 1, min( 120, (int) ( $request->get_param( 'days' ) ?: 30 ) ) );
+					$cut    = gmdate( 'Y-m-d', time() - $days * 86400 );
+					$counts = (array) get_option( 'gbg_core_go_counts', array() );
+					return array( 'days' => $days, 'counts' => array_filter( $counts, static fn( $d ) => $d > $cut, ARRAY_FILTER_USE_KEY ) );
 				},
 			)
 		);
