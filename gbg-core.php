@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.44
+ * Version: 0.3.45
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.44';
+const GBG_CORE_VERSION = '0.3.45';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -955,11 +955,13 @@ add_action(
 						$stored = get_option( GBG_CORE_OPTION, array() );
 						$merged = array_merge( is_array( $stored ) ? $stored : array(), gbg_core_sanitize( $input ) );
 						update_option( GBG_CORE_OPTION, $merged, false );
+						$robots = gbg_core_sync_robots_file();
 						// Front-end features (A/B tests, share bar, opt-in) live in the page HTML: empty the page cache so visitors get them.
 						do_action( 'breeze_clear_all_cache' );
 						return array(
 							'version'  => GBG_CORE_VERSION,
 							'settings' => gbg_core_settings( true ),
+							'robots'   => $robots,
 						);
 					},
 				),
@@ -2508,21 +2510,43 @@ add_filter(
 // GTranslate language folders Baidu does not need (all languages except English and Chinese).
 const GBG_CORE_BAIDU_SKIP = array( 'af', 'sq', 'ar', 'hy', 'az', 'eu', 'be', 'bn', 'bg', 'co', 'hr', 'cs', 'da', 'nl', 'eo', 'et', 'tl', 'fi', 'fr', 'gl', 'ka', 'de', 'el', 'gu', 'haw', 'iw', 'hi', 'hu', 'id', 'it', 'ja', 'jw', 'kn', 'kk', 'ko', 'ku', 'ky', 'lo', 'la', 'lv', 'lt', 'lb', 'mk', 'mg', 'ms', 'ml', 'mr', 'my', 'ne', 'no', 'fa', 'pl', 'pt', 'pa', 'ro', 'ru', 'sr', 'sk', 'sl', 'es', 'sv', 'ta', 'te', 'th', 'tr', 'uk', 'vi' );
 
-/** robots.txt group for Baiduspider. Pure. */
+/** robots.txt group for Baiduspider, between markers so it can be taken out again. Pure. */
 function gbg_core_baidu_robots(): string {
-	$lines = array( '', '# GBG Core: Baidu only on English and Chinese pages', 'User-agent: Baiduspider', 'Disallow: /cdn-cgi/rum' );
+	$lines = array( '# GBG CORE BAIDU START (Baidu only on English and Chinese pages)', 'User-agent: Baiduspider', 'Disallow: /cdn-cgi/rum' );
 	foreach ( GBG_CORE_BAIDU_SKIP as $lang ) {
 		$lines[] = 'Disallow: /' . $lang . '/';
 	}
+	$lines[] = '# GBG CORE BAIDU END';
 	return implode( "\n", $lines ) . "\n";
+}
+
+/** robots.txt text with the Baidu group added ($on) or removed; the rest stays as it was. Pure. */
+function gbg_core_robots_baidu( string $text, bool $on ): string {
+	$text = rtrim( (string) preg_replace( '/\n*# GBG CORE BAIDU START.*?# GBG CORE BAIDU END\n?/s', "\n", $text ) ) . "\n";
+	return $on ? $text . "\n" . gbg_core_baidu_robots() : $text;
+}
+
+// WordPress builds robots.txt only when there is no file; on these sites a physical robots.txt exists (Yoast file
+// editor), so the setting also rewrites that file. Called after every settings save.
+function gbg_core_sync_robots_file(): string {
+	$file = ABSPATH . 'robots.txt';
+	if ( ! is_file( $file ) || ! is_writable( $file ) ) {
+		return is_file( $file ) ? 'not writable' : 'virtual';
+	}
+	$old = (string) file_get_contents( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+	$new = gbg_core_robots_baidu( $old, (bool) gbg_core_settings()['baidu_limit'] );
+	if ( $new === $old ) {
+		return 'unchanged';
+	}
+	return false === file_put_contents( $file, $new ) ? 'write failed' : 'updated'; // phpcs:ignore WordPress.WP.AlternativeFunctions
 }
 
 add_filter(
 	'robots_txt',
 	static function ( $output ) {
-		return gbg_core_settings()['baidu_limit'] ? rtrim( (string) $output ) . "\n" . gbg_core_baidu_robots() : $output;
+		return gbg_core_settings()['baidu_limit'] ? gbg_core_robots_baidu( (string) $output, true ) : $output;
 	},
-	PHP_INT_MAX // Yoast rebuilds the whole file at 99999; append after it
+	PHP_INT_MAX // Yoast rebuilds the whole text at 99999; add after it
 );
 
 // /favicon.ico: WordPress answers every request with a 302 to the site icon (5k a day, each a PHP run). Serve a small
