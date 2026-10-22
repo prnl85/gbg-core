@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.32
+ * Version: 0.3.33
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.32';
+const GBG_CORE_VERSION = '0.3.33';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1711,12 +1711,19 @@ function gbg_core_go_country_target( string $path, array $query, array $s ): ?st
 		return $target;
 	}
 	$c   = strtolower( (string) ( $query['c'] ?? '' ) );
-	$url = (string) ( $s['go_country'][ $m[1] ][ $c ] ?? '' );
-	if ( '' === $url ) {
-		return $target;
-	}
+	$url = (string) ( $s['go_country'][ $m[1] ][ $c ] ?? '' ) ?: $target;
 	$sub = (string) ( $query['s'] ?? '' );
-	return preg_match( '/^p\d{1,9}$/', $sub ) ? (string) preg_replace( '/([?&]sub_id=)[^&]*/', '${1}' . $sub, $url ) : $url;
+	// The page ID (and the link) become the Travelpayouts sub_id, so sales show per page. Short links have no sub_id to set.
+	return preg_match( '/^p\d{1,9}$/', $sub ) ? (string) preg_replace( '/([?&]sub_id=)[^&]*/', '${1}' . $sub . '-' . $m[1], $url ) : $url;
+}
+
+// Every /go/<slug>/ link on a page without a query yet carries the page ID (?s=p123): sub_id and counter per page.
+function gbg_core_go_page_links( string $html, int $post_id, array $slugs ): string {
+	if ( ! $slugs || $post_id < 1 ) {
+		return $html;
+	}
+	$rx = '#href="((?:https?://' . preg_quote( (string) wp_parse_url( home_url(), PHP_URL_HOST ), '#' ) . ')?/go/(?:' . implode( '|', array_map( 'preg_quote', $slugs ) ) . ')/)"#';
+	return (string) preg_replace( $rx, 'href="$1?s=p' . $post_id . '"', $html );
 }
 
 // On a mapped page: /go/<slug>/ links (own host or relative) carry the page's country and ID.
@@ -1727,6 +1734,20 @@ function gbg_core_go_country_links( string $html, string $country, int $post_id,
 	$rx = '#href="((?:https?://' . preg_quote( (string) wp_parse_url( home_url(), PHP_URL_HOST ), '#' ) . ')?/go/(' . implode( '|', array_map( 'preg_quote', $slugs ) ) . ')/)"#';
 	return (string) preg_replace( $rx, 'href="$1?c=' . $country . '&amp;s=p' . $post_id . '"', $html );
 }
+
+add_action(
+	'template_redirect',
+	static function () {
+		$s = gbg_core_settings();
+		if ( ! $s['go_links'] || is_admin() || is_feed() || ! is_singular() ) {
+			return;
+		}
+		$post_id = (int) get_queried_object_id();
+		$slugs   = array_keys( (array) $s['go_links'] );
+		ob_start( static fn( $html ) => ( is_string( $html ) && '' !== $html ) ? gbg_core_go_page_links( $html, $post_id, $slugs ) : $html );
+	},
+	20
+);
 
 // Generated pages that still carry the template placeholder host (https://yourwebsite.com/go/...) point to our own /go/.
 function gbg_core_fix_placeholder_go( string $html ): string {
@@ -1856,7 +1877,11 @@ function gbg_core_track_script(): string {
 		. 'p={link_slug:slug||host,link_domain:host,placement:pl,ab_test:ab?ab.getAttribute("data-gbg-ab"):"",link_text:(a.textContent||a.getAttribute("aria-label")||"").replace(/\s+/g," ").trim().slice(0,80)};'
 		// /go/ links are counted by the server on the redirect (reliable); the page only hands over where the click was.
 		. 'if(slug){document.cookie="gbg_pl="+encodeURIComponent([p.placement,p.ab_test,p.link_text,location.href].join("|"))+";path=/;max-age=60;SameSite=Lax";'
-		. 'var o={event:"gbg_affiliate_click"};for(var k in p)o[k]=p[k];(window.dataLayer=window.dataLayer||[]).push(o)}else{gbgEv("affiliate_click",p)}},true)})('
+		. 'var o={event:"gbg_affiliate_click"};for(var k in p)o[k]=p[k];(window.dataLayer=window.dataLayer||[]).push(o)}else{gbgEv("affiliate_click",p)}},true);'
+		// Cookie banner choice, counted anonymously (no cookie, no GA4): shown once per page view, then the button pressed.
+		. 'var cs=function(st){try{navigator.sendBeacon(c.u,JSON.stringify({n:"consent",p:{status:st}}))}catch(x){}};'
+		. 'setTimeout(function(){var b=document.querySelector(".cmplz-cookiebanner");if(b&&b.offsetParent!==null&&!/cmplz-dismissed|cmplz-hidden/.test(b.className))cs("shown")},1500);'
+		. 'document.addEventListener("click",function(e){var t=e.target.closest&&e.target.closest(".cmplz-accept,.cmplz-deny,.cmplz-save-preferences");if(t)cs(/accept/.test(t.className)?"allow":/deny/.test(t.className)?"deny":"custom")},true)})('
 		. wp_json_encode( $cfg ) . ');</script>';
 }
 
@@ -1936,7 +1961,7 @@ function gbg_core_go_track( string $target ): void {
 		$slug = $m[1];
 	}
 	$pl = explode( '|', (string) wp_unslash( $_COOKIE['gbg_pl'] ?? '' ), 4 ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
-	gbg_core_go_count( $slug, ( $pl[0] ?? '' ) ?: 'unknown' );
+	gbg_core_go_count( $slug, ( $pl[0] ?? '' ) ?: 'unknown', (string) ( $_GET['s'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification,WordPress.Security.ValidatedSanitizedInput
 	gbg_core_mp_send(
 		'affiliate_click',
 		array(
@@ -1965,7 +1990,7 @@ add_action(
 					$raw = (string) $request->get_body();
 					$b   = strlen( $raw ) <= 2048 ? json_decode( $raw, true ) : null;
 					$n   = is_array( $b ) ? (string) ( $b['n'] ?? '' ) : '';
-					if ( ! in_array( $n, array( 'affiliate_click', 'share', 'promo_copy' ), true ) ) {
+					if ( ! in_array( $n, array( 'affiliate_click', 'share', 'promo_copy', 'consent' ), true ) ) {
 						return new WP_REST_Response( null, 204 );
 					}
 					$rl = 'gbg_ev_rl_' . substr( hash( 'sha256', gbg_core_client_ip( $_SERVER ) . wp_salt( 'nonce' ) ), 0, 16 ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
@@ -1975,6 +2000,10 @@ add_action(
 					}
 					set_transient( $rl, $rn + 1, 10 * MINUTE_IN_SECONDS );
 					$p                  = array_intersect_key( (array) ( $b['p'] ?? array() ), array_flip( array( 'link_slug', 'link_domain', 'placement', 'ab_test', 'link_text', 'method', 'item_id', 'promo_code' ) ) );
+					if ( 'consent' === $n ) { // anonymous count of the banner choice (shown / allow / deny), never sent to GA4
+						gbg_core_go_count( 'consent', in_array( $b['p']['status'] ?? '', array( 'shown', 'allow', 'deny', 'custom' ), true ) ? (string) $b['p']['status'] : 'unknown' );
+						return new WP_REST_Response( null, 204 );
+					}
 					if ( 'affiliate_click' === $n ) {
 						gbg_core_go_count( (string) ( $p['link_slug'] ?? '' ), (string) ( $p['placement'] ?? '' ) ?: 'unknown' );
 					}
@@ -2071,13 +2100,13 @@ function gbg_core_is_bot( string $ua ): bool {
 }
 
 /** Adds one click to the counts array ({day: {slug|placement: n}}), dropping days older than $keep_days. Pure. */
-function gbg_core_go_count_add( array $counts, string $day, string $slug, string $placement, int $keep_days = 120 ): array {
+function gbg_core_go_count_add( array $counts, string $day, string $slug, string $placement, int $keep_days = 120, string $page = '' ): array {
 	$slug      = preg_replace( '/[^a-z0-9.-]/', '', strtolower( $slug ) );
 	$placement = preg_replace( '/[^a-z]/', '', strtolower( $placement ) );
 	if ( '' === $slug ) {
 		return $counts;
 	}
-	$key                    = substr( $slug, 0, 60 ) . '|' . ( substr( $placement, 0, 20 ) ?: 'unknown' );
+	$key                    = substr( $slug, 0, 60 ) . '|' . ( substr( $placement, 0, 20 ) ?: 'unknown' ) . ( preg_match( '/^p\d{1,9}$/', $page ) ? '|' . $page : '' );
 	$counts[ $day ][ $key ] = ( $counts[ $day ][ $key ] ?? 0 ) + 1;
 	$cut                    = gmdate( 'Y-m-d', strtotime( $day . ' 12:00:00 UTC' ) - $keep_days * 86400 );
 	foreach ( array_keys( $counts ) as $d ) {
@@ -2088,12 +2117,12 @@ function gbg_core_go_count_add( array $counts, string $day, string $slug, string
 	return $counts;
 }
 
-function gbg_core_go_count( string $slug, string $placement ): void {
+function gbg_core_go_count( string $slug, string $placement, string $page = '' ): void {
 	if ( is_user_logged_in() || gbg_core_is_bot( (string) ( $_SERVER['HTTP_USER_AGENT'] ?? '' ) ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 		return;
 	}
 	$counts = get_option( 'gbg_core_go_counts', array() );
-	update_option( 'gbg_core_go_counts', gbg_core_go_count_add( is_array( $counts ) ? $counts : array(), gmdate( 'Y-m-d' ), $slug, $placement ), false );
+	update_option( 'gbg_core_go_counts', gbg_core_go_count_add( is_array( $counts ) ? $counts : array(), gmdate( 'Y-m-d' ), $slug, $placement, 120, $page ), false );
 }
 
 add_action(
