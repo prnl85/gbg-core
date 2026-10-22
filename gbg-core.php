@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.38
+ * Version: 0.3.39
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.38';
+const GBG_CORE_VERSION = '0.3.39';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -92,6 +92,10 @@ function gbg_core_defaults(): array {
 		// Speed (0.3.37, mobile LCP): serve the WebP copies Imagify already made (<file>.jpg.webp) for own uploads in
 		// <img src/srcset> and CSS backgrounds, and preload the first background image (the hero) with high priority.
 		'webp_enabled'       => false,
+		// 0.3.39: theme images (Impreza us_image, class attachment-<size>) get the attachment's srcset with sizes=auto, so
+		// a phone loads a smaller file; Google Fonts served from our own server once POST /gbg/v1/local-fonts stored them.
+		'srcset_enabled'     => false,
+		'local_fonts'        => false,
 	);
 }
 
@@ -106,7 +110,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -1793,25 +1797,131 @@ function gbg_core_webp_html( string $html, string $base, callable $exists ): str
 	return $html;
 }
 
+// Lazy theme images without a srcset get the attachment's srcset; sizes=auto lets the browser use the laid-out width.
+function gbg_core_img_srcset( string $html, callable $srcset_for ): string {
+	return (string) preg_replace_callback(
+		'#<img\b[^>]*\bclass="[^"]*\battachment-[a-z0-9_-]+[^"]*"[^>]*>#i',
+		static function ( $m ) use ( $srcset_for ) {
+			$tag = $m[0];
+			if ( stripos( $tag, 'srcset=' ) !== false || stripos( $tag, 'loading="lazy"' ) === false || ! preg_match( '#\bsrc="([^"]+)"#', $tag, $src ) ) {
+				return $tag;
+			}
+			$set = (string) $srcset_for( html_entity_decode( $src[1] ) );
+			if ( '' === $set ) {
+				return $tag;
+			}
+			return (string) preg_replace( '#\bsrc="#', 'srcset="' . esc_attr( $set ) . '" sizes="auto, 100vw" src="', $tag, 1 );
+		},
+		$html
+	);
+}
+
+// The Google Fonts stylesheet link points to our stored copy when one exists for exactly that URL.
+function gbg_core_local_fonts_html( string $html, array $map ): string {
+	if ( ! $map ) {
+		return $html;
+	}
+	return (string) preg_replace_callback(
+		'#(href=[\'"])(https://fonts\.googleapis\.com/css2\?[^\'"]+)([\'"])#',
+		static fn( $m ) => isset( $map[ html_entity_decode( $m[2] ) ] ) ? $m[1] . esc_url( $map[ html_entity_decode( $m[2] ) ] ) . $m[3] : $m[0],
+		$html
+	);
+}
+
 add_action(
 	'template_redirect',
 	static function () {
-		if ( ! gbg_core_settings()['webp_enabled'] || is_admin() || is_feed() || wp_doing_ajax() ) {
+		$s = gbg_core_settings();
+		if ( ! ( $s['webp_enabled'] || $s['srcset_enabled'] || $s['local_fonts'] ) || is_admin() || is_feed() || wp_doing_ajax() ) {
 			return;
 		}
 		$up = wp_get_upload_dir();
 		ob_start(
-			static function ( $html ) use ( $up ) {
+			static function ( $html ) use ( $up, $s ) {
 				if ( ! is_string( $html ) || '' === $html || ! str_contains( $html, '</title>' ) ) {
 					return $html;
 				}
 				$base = (string) $up['baseurl'];
 				$dir  = (string) $up['basedir'];
-				return gbg_core_webp_html( $html, $base, static fn( $url ) => is_file( $dir . substr( $url, strlen( $base ) ) ) );
+				if ( $s['srcset_enabled'] ) {
+					$html = gbg_core_img_srcset(
+						$html,
+						static function ( $url ) use ( $base ) {
+							if ( ! str_starts_with( $url, $base ) ) {
+								return '';
+							}
+							$id = attachment_url_to_postid( (string) preg_replace( '#-\d+x\d+(\.[a-z]+)$#i', '$1', $url ) ) ?: attachment_url_to_postid( $url );
+							return $id ? (string) wp_get_attachment_image_srcset( $id, 'large' ) : '';
+						}
+					);
+				}
+				if ( $s['local_fonts'] ) {
+					$html = gbg_core_local_fonts_html( $html, (array) get_option( 'gbg_core_local_fonts', array() ) );
+				}
+				if ( $s['webp_enabled'] ) {
+					$html = gbg_core_webp_html( $html, $base, static fn( $url ) => is_file( $dir . substr( $url, strlen( $base ) ) ) );
+				}
+				return $html;
 			}
 		);
 	},
 	21
+);
+
+// Store a Google Fonts stylesheet and its font files under uploads/gbg-fonts/ (admin only; Google hosts only).
+add_action(
+	'rest_api_init',
+	static function () {
+		register_rest_route(
+			'gbg/v1',
+			'/local-fonts',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => 'gbg_core_can_manage',
+				'callback'            => static function ( WP_REST_Request $request ) {
+					$url = html_entity_decode( (string) $request->get_param( 'url' ) );
+					if ( ! preg_match( '#^https://fonts\.googleapis\.com/css2\?[\w=&:;,.@+%-]+$#', $url ) ) {
+						return new WP_Error( 'gbg_url', 'Only a fonts.googleapis.com/css2 URL', array( 'status' => 400 ) );
+					}
+					$ua  = array( 'user-agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36' );
+					$res = wp_safe_remote_get( $url, array( 'timeout' => 20, 'headers' => $ua ) );
+					$css = (string) wp_remote_retrieve_body( $res );
+					if ( 200 !== wp_remote_retrieve_response_code( $res ) || ! str_contains( $css, '@font-face' ) ) {
+						return new WP_Error( 'gbg_fetch', 'Google Fonts did not answer', array( 'status' => 502 ) );
+					}
+					$up   = wp_get_upload_dir();
+					$sub  = '/gbg-fonts/' . substr( md5( $url ), 0, 10 );
+					$dir  = $up['basedir'] . $sub;
+					wp_mkdir_p( $dir );
+					$n = 0;
+					$css = (string) preg_replace_callback(
+						'#url\((https://fonts\.gstatic\.com/[\w/.-]+\.woff2)\)#',
+						static function ( $m ) use ( $dir, $up, $sub, &$n ) {
+							$name = basename( $m[1] );
+							if ( ! is_file( "$dir/$name" ) ) {
+								$f = wp_safe_remote_get( $m[1], array( 'timeout' => 20 ) );
+								if ( 200 !== wp_remote_retrieve_response_code( $f ) ) {
+									return $m[0];
+								}
+								file_put_contents( "$dir/$name", wp_remote_retrieve_body( $f ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+								++$n;
+							}
+							return 'url(' . $up['baseurl'] . "$sub/$name)";
+						},
+						$css
+					);
+					if ( str_contains( $css, 'fonts.gstatic.com' ) ) {
+						return new WP_Error( 'gbg_fetch', 'Not every font file could be stored; nothing switched', array( 'status' => 502 ) );
+					}
+					file_put_contents( "$dir/fonts.css", $css ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+					$map         = (array) get_option( 'gbg_core_local_fonts', array() );
+					$map[ $url ] = $up['baseurl'] . "$sub/fonts.css?v=" . substr( md5( $css ), 0, 8 );
+					update_option( 'gbg_core_local_fonts', $map, false );
+					return array( 'url' => $url, 'local' => $map[ $url ], 'files_stored' => $n );
+				},
+			)
+		);
+	}
 );
 
 // Theme speed settings (0.3.38): read and change only the Impreza options about assets, icons, fonts and scripts, so
