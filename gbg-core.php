@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: GoBackpackGo Core
+ * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.30
+ * Version: 0.3.31
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.30';
+const GBG_CORE_VERSION = '0.3.31';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1347,7 +1347,7 @@ add_action(
 				'callback'            => static function ( WP_REST_Request $request ) {
 					$b = json_decode( $request->get_body(), true );
 					[ $ok, $err, $d ] = gbg_core_lead_validate( is_array( $b ) ? $b : array() );
-					$ip_hash = substr( hash( 'sha256', ( $_SERVER['REMOTE_ADDR'] ?? '' ) . wp_salt( 'nonce' ) ), 0, 16 ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+					$ip_hash = substr( hash( 'sha256', gbg_core_client_ip( $_SERVER ) . wp_salt( 'nonce' ) ), 0, 16 ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 					if ( ! $ok ) {
 						// Bots get the same success shape, so the honeypot is not revealed.
 						return 'spam' === $err ? array( 'ok' => true, 'html' => '<p><strong>Thanks!</strong></p>' )
@@ -1897,6 +1897,22 @@ function gbg_core_mp_stat( string $name, string $outcome ): void {
 	set_transient( 'gbg_core_mp_stats', $st, 2 * DAY_IN_SECONDS );
 }
 
+/**
+ * The visitor's IP for rate limits. Behind Cloudflare REMOTE_ADDR is a Cloudflare edge shared by many visitors, so the
+ * CF-Connecting-IP header wins when it holds a valid IP. Spoofing it (by calling the origin directly) only gets a caller
+ * its own bucket; it never lifts a limit for others. Pure.
+ */
+function gbg_core_client_ip( array $server ): string {
+	$cf = (string) ( $server['HTTP_CF_CONNECTING_IP'] ?? '' );
+	return filter_var( $cf, FILTER_VALIDATE_IP ) ? $cf : (string) ( $server['REMOTE_ADDR'] ?? '' );
+}
+
+/** Keeps a page URL only when it is on our own host (GA4 page_location from the browser or a Referer); else ''. Pure. */
+function gbg_core_own_url( string $url, string $own_host ): string {
+	$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+	return '' !== $own_host && $host === strtolower( $own_host ) && in_array( wp_parse_url( $url, PHP_URL_SCHEME ), array( 'http', 'https' ), true ) ? $url : '';
+}
+
 function gbg_core_mp_send( string $name, array $params ): bool {
 	$s      = gbg_core_settings();
 	$secret = (string) get_option( 'gbg_core_ga4_secret', '' );
@@ -1944,14 +1960,21 @@ add_action(
 				'methods'             => 'POST',
 				'permission_callback' => '__return_true',
 				'callback'            => static function ( WP_REST_Request $request ) {
-					$b = json_decode( (string) $request->get_body(), true );
-					$n = is_array( $b ) ? (string) ( $b['n'] ?? '' ) : '';
+					// Public on purpose; bounded (code review 22-10): small bodies only, 30 events per IP per 10 min, no write for junk.
+					$raw = (string) $request->get_body();
+					$b   = strlen( $raw ) <= 2048 ? json_decode( $raw, true ) : null;
+					$n   = is_array( $b ) ? (string) ( $b['n'] ?? '' ) : '';
 					if ( ! in_array( $n, array( 'affiliate_click', 'share', 'promo_copy' ), true ) ) {
-						gbg_core_mp_stat( 'ev', 'rejected' );
 						return new WP_REST_Response( null, 204 );
 					}
+					$rl = 'gbg_ev_rl_' . substr( hash( 'sha256', gbg_core_client_ip( $_SERVER ) . wp_salt( 'nonce' ) ), 0, 16 ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+					$rn = (int) get_transient( $rl );
+					if ( $rn >= 30 ) {
+						return new WP_REST_Response( null, 429 );
+					}
+					set_transient( $rl, $rn + 1, 10 * MINUTE_IN_SECONDS );
 					$p                  = array_intersect_key( (array) ( $b['p'] ?? array() ), array_flip( array( 'link_slug', 'link_domain', 'placement', 'ab_test', 'link_text', 'method', 'item_id', 'promo_code' ) ) );
-					$p['page_location'] = (string) ( $b['l'] ?? '' );
+					$p['page_location'] = gbg_core_own_url( (string) ( $b['l'] ?? '' ), (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
 					gbg_core_mp_send( $n, $p );
 					return new WP_REST_Response( null, 204 );
 				},
