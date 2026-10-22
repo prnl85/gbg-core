@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.40
+ * Version: 0.3.41
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.40';
+const GBG_CORE_VERSION = '0.3.41';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -885,6 +885,9 @@ add_action(
 				'methods'             => 'POST',
 				'permission_callback' => 'gbg_core_ab_can_hit',
 				'callback'            => static function ( WP_REST_Request $request ) {
+					if ( gbg_core_is_bot_request( (string) $request->get_header( 'user_agent' ) ) ) {
+						return new WP_REST_Response( null, 204 ); // access logs 22-10: render bots and the translation proxy inflated A/B views
+					}
 					$b = json_decode( $request->get_body(), true );
 					$ok = is_array( $b ) && gbg_core_ab_record( (string) ( $b['t'] ?? '' ), (string) ( $b['v'] ?? '' ), (string) ( $b['e'] ?? '' ), gmdate( 'Y-m-d' ) );
 					return new WP_REST_Response( null, $ok ? 204 : 400 );
@@ -2319,6 +2322,9 @@ add_action(
 				'permission_callback' => '__return_true',
 				'callback'            => static function ( WP_REST_Request $request ) {
 					// Public on purpose; bounded (code review 22-10): small bodies only, 30 events per IP per 10 min, no write for junk.
+					if ( gbg_core_is_bot_request( (string) $request->get_header( 'user_agent' ) ) ) {
+						return new WP_REST_Response( null, 204 );
+					}
 					$raw = (string) $request->get_body();
 					$b   = strlen( $raw ) <= 2048 ? json_decode( $raw, true ) : null;
 					$n   = is_array( $b ) ? (string) ( $b['n'] ?? '' ) : '';
@@ -2440,6 +2446,36 @@ add_action(
 function gbg_core_is_bot( string $ua ): bool {
 	return '' === trim( $ua ) || (bool) preg_match( '/bot|crawl|spider|slurp|preview|fetch|curl|wget|python|java\/|go-http|headless|phantom|lighthouse|monitor|scanner|facebookexternalhit|embedly|whatsapp/i', $ua );
 }
+
+// Beacons from crawlers that run JavaScript (Baiduspider-render, meta-webindexer) and from the GTranslate proxy, which
+// replays the visit from its own servers, are not readers: they must not count in A/B tests or events.
+function gbg_core_is_bot_request( string $ua ): bool {
+	return gbg_core_is_bot( $ua ) || false !== stripos( $ua, 'GTranslate' ) || false !== stripos( $ua, 'meta-web' );
+}
+
+// /favicon.ico: WordPress answers every request with a 302 to the site icon (5k a day, each a PHP run). Serve the icon
+// itself with a long cache lifetime, so Cloudflare keeps it at the edge.
+add_action(
+	'do_faviconico',
+	static function () {
+		$url = (string) get_site_icon_url( 32 );
+		$up  = wp_get_upload_dir();
+		if ( '' === $url || ! str_starts_with( $url, (string) $up['baseurl'] ) ) {
+			return;
+		}
+		$file = $up['basedir'] . substr( strtok( $url, '?' ), strlen( (string) $up['baseurl'] ) );
+		$type = wp_check_filetype( $file )['type'];
+		if ( ! is_file( $file ) || ! $type || ! str_starts_with( (string) $type, 'image/' ) ) {
+			return;
+		}
+		header( 'Content-Type: ' . $type );
+		header( 'Cache-Control: public, max-age=604800' );
+		header( 'Content-Length: ' . filesize( $file ) );
+		readfile( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions
+		exit;
+	},
+	5
+);
 
 /** Adds one click to the counts array ({day: {slug|placement: n}}), dropping days older than $keep_days. Pure. */
 function gbg_core_go_count_add( array $counts, string $day, string $slug, string $placement, int $keep_days = 120, string $page = '' ): array {
