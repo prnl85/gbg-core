@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.42
+ * Version: 0.3.43
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.42';
+const GBG_CORE_VERSION = '0.3.43';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -98,6 +98,9 @@ function gbg_core_defaults(): array {
 		'local_fonts'        => false,
 		// 0.3.41: small PNG/ICO site icons instead of the 181 KB traced SVG (requested ~7,500 times a day).
 		'light_icons'        => false,
+		// 0.3.43: robots.txt keeps Baiduspider to the English and Chinese pages (Paul 22-10: it crawled all GTranslate
+		// languages, ~260 real visits a year come from Baidu, all of them kept).
+		'baidu_limit'        => false,
 	);
 }
 
@@ -112,7 +115,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -490,14 +493,17 @@ function gbg_core_update_item( array $remote ): ?object {
 }
 
 // 'Check again' on Dashboard → Updates (force-check) also refreshes our own cached release, so a new version shows at
-// once instead of after the 6-hour cache (Paul 21-10: live did not show 0.3.13).
+// once instead of after the 6-hour cache (Paul 21-10: live did not show 0.3.13). Priority 1: core's own plugin check
+// (_maybe_update_plugins) also runs on this hook at 10 and must see the emptied cache (Paul 22-10: 0.3.42 did not show).
 add_action(
 	'load-update-core.php',
 	static function () {
 		if ( isset( $_GET['force-check'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification
 			delete_transient( 'gbg_core_release' );
+			delete_site_transient( 'update_plugins' );
 		}
-	}
+	},
+	1
 );
 
 function gbg_core_remote_release(): array {
@@ -2492,6 +2498,31 @@ add_filter(
 	},
 	10,
 	2
+);
+
+/* -------------------------------------------------------------------------
+ * robots.txt: Baiduspider only on the English and Chinese pages. A crawler that matches its own group ignores the
+ * '*' group, so the rules every crawler gets are repeated here.
+ * ---------------------------------------------------------------------- */
+
+// GTranslate language folders Baidu does not need (all languages except English and Chinese).
+const GBG_CORE_BAIDU_SKIP = array( 'af', 'sq', 'ar', 'hy', 'az', 'eu', 'be', 'bn', 'bg', 'co', 'hr', 'cs', 'da', 'nl', 'eo', 'et', 'tl', 'fi', 'fr', 'gl', 'ka', 'de', 'el', 'gu', 'haw', 'iw', 'hi', 'hu', 'id', 'it', 'ja', 'jw', 'kn', 'kk', 'ko', 'ku', 'ky', 'lo', 'la', 'lv', 'lt', 'lb', 'mk', 'mg', 'ms', 'ml', 'mr', 'my', 'ne', 'no', 'fa', 'pl', 'pt', 'pa', 'ro', 'ru', 'sr', 'sk', 'sl', 'es', 'sv', 'ta', 'te', 'th', 'tr', 'uk', 'vi' );
+
+/** robots.txt group for Baiduspider. Pure. */
+function gbg_core_baidu_robots(): string {
+	$lines = array( '', '# GBG Core: Baidu only on English and Chinese pages', 'User-agent: Baiduspider', 'Disallow: /cdn-cgi/rum' );
+	foreach ( GBG_CORE_BAIDU_SKIP as $lang ) {
+		$lines[] = 'Disallow: /' . $lang . '/';
+	}
+	return implode( "\n", $lines ) . "\n";
+}
+
+add_filter(
+	'robots_txt',
+	static function ( $output ) {
+		return gbg_core_settings()['baidu_limit'] ? rtrim( (string) $output ) . "\n" . gbg_core_baidu_robots() : $output;
+	},
+	99999
 );
 
 // /favicon.ico: WordPress answers every request with a 302 to the site icon (5k a day, each a PHP run). Serve a small
