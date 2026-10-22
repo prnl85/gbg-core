@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.35
+ * Version: 0.3.36
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.35';
+const GBG_CORE_VERSION = '0.3.36';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -414,7 +414,8 @@ add_action(
  * ---------------------------------------------------------------------- */
 
 function gbg_core_mcp_locked_route( string $route ): bool {
-	return 0 === strpos( $route, '/mcp/mcp-adapter-default-server' );
+	// WordPress matches REST routes case-insensitively, so the lock must too (security review 22-10: /MCP/... bypassed it).
+	return 0 === stripos( '/' . ltrim( rawurldecode( $route ), '/' ), '/mcp/mcp-adapter-default-server' );
 }
 
 add_filter(
@@ -1283,17 +1284,24 @@ function gbg_core_lead_validate( array $b ): array {
 	);
 }
 
-/** Insert, or merge tags into the existing row (re-subscribes an unsubscribed address: a new, explicit sign-up). */
+/**
+ * Insert a new sign-up, or merge tags into an existing row. An anonymous request never re-activates an unsubscribed
+ * address, never renews its consent and never overwrites a stored first name (security review 22-10): without a
+ * confirmation mail the sender is not proven to own the address. A repeat sign-up only adds tags and counts.
+ */
 function gbg_core_lead_save( array $d, string $ip_hash ): void {
 	global $wpdb;
 	gbg_core_leads_install();
 	$table = gbg_core_leads_table();
 	$now   = gmdate( 'Y-m-d H:i:s' );
-	$row   = $wpdb->get_row( $wpdb->prepare( "SELECT id, tags, first_name FROM $table WHERE email = %s", $d['email'] ), ARRAY_A ); // phpcs:ignore WordPress.DB
+	$row   = $wpdb->get_row( $wpdb->prepare( "SELECT id, tags, first_name, status FROM $table WHERE email = %s", $d['email'] ), ARRAY_A ); // phpcs:ignore WordPress.DB
 	$base  = array( 'status' => 'active', 'consent_version' => gbg_core_settings()['consent_version'], 'consent_at' => $now, 'updated_at' => $now, 'ip_hash' => $ip_hash );
 	if ( $row ) {
 		$tags = gbg_core_tags_clean( array_merge( array_filter( explode( ',', (string) $row['tags'] ) ), $d['tags'] ) );
-		$wpdb->update( $table, $base + array( 'tags' => implode( ',', $tags ), 'first_name' => '' !== $d['name'] ? $d['name'] : $row['first_name'] ), array( 'id' => (int) $row['id'] ) ); // phpcs:ignore WordPress.DB
+		if ( 'unsubscribed' === $row['status'] ) {
+			return; // stays unsubscribed; the visitor still sees the thank-you page
+		}
+		$wpdb->update( $table, array( 'tags' => implode( ',', $tags ), 'updated_at' => $now, 'first_name' => '' !== (string) $row['first_name'] ? $row['first_name'] : $d['name'] ), array( 'id' => (int) $row['id'] ) ); // phpcs:ignore WordPress.DB
 		$wpdb->query( $wpdb->prepare( "UPDATE $table SET signups = signups + 1 WHERE id = %d", (int) $row['id'] ) ); // phpcs:ignore WordPress.DB
 	} else {
 		$wpdb->insert( $table, $base + array( 'email' => $d['email'], 'first_name' => $d['name'], 'tags' => implode( ',', $d['tags'] ), 'created_at' => $now, 'signups' => 1 ) ); // phpcs:ignore WordPress.DB
@@ -1887,11 +1895,12 @@ function gbg_core_track_script(): string {
 		. 'a.closest(".gbg-sticky,.w-sticky,[class*=sticky]")?"sticky":/\bw-btn\b|button/.test(a.className)?"button":"content",'
 		. 'p={link_slug:slug||host,link_domain:host,placement:pl,ab_test:ab?ab.getAttribute("data-gbg-ab"):"",link_text:(a.textContent||a.getAttribute("aria-label")||"").replace(/\s+/g," ").trim().slice(0,80)};'
 		// /go/ links are counted by the server on the redirect (reliable); the page only hands over where the click was.
-		. 'if(slug){document.cookie="gbg_pl="+encodeURIComponent([p.placement,p.ab_test,p.link_text,location.href].join("|"))+";path=/;max-age=60;SameSite=Lax";'
+		. 'if(slug){document.cookie="gbg_pl="+encodeURIComponent([p.placement,p.ab_test,p.link_text,location.href].map(encodeURIComponent).join("|"))+";path=/;max-age=60;SameSite=Lax";'
 		. 'var o={event:"gbg_affiliate_click"};for(var k in p)o[k]=p[k];(window.dataLayer=window.dataLayer||[]).push(o)}else{gbgEv("affiliate_click",p)}},true);'
 		// Cookie banner choice, counted anonymously (no cookie, no GA4): shown once per page view, then the button pressed.
 		. 'var cs=function(st){try{navigator.sendBeacon(c.u,JSON.stringify({n:"consent",p:{status:st}}))}catch(x){}};'
-		. 'setTimeout(function(){var b=document.querySelector(".cmplz-cookiebanner");if(b&&b.offsetParent!==null&&!/cmplz-dismissed|cmplz-hidden/.test(b.className))cs("shown")},1500);'
+		. 'setTimeout(function(){var b=document.querySelector(".cmplz-cookiebanner"),r=b&&b.getBoundingClientRect(),st=b&&getComputedStyle(b);'
+		. 'if(b&&r.height>0&&st.display!=="none"&&st.visibility!=="hidden"&&!/cmplz-dismissed|cmplz-hidden/.test(b.className))cs("shown")},1500);'
 		. 'document.addEventListener("click",function(e){var t=e.target.closest&&e.target.closest(".cmplz-accept,.cmplz-deny,.cmplz-save-preferences");if(t)cs(/accept/.test(t.className)?"allow":/deny/.test(t.className)?"deny":"custom")},true)})('
 		. wp_json_encode( $cfg ) . ');</script>';
 }
@@ -1939,8 +1948,88 @@ function gbg_core_mp_stat( string $name, string $outcome ): void {
  * its own bucket; it never lifts a limit for others. Pure.
  */
 function gbg_core_client_ip( array $server ): string {
-	$cf = (string) ( $server['HTTP_CF_CONNECTING_IP'] ?? '' );
-	return filter_var( $cf, FILTER_VALIDATE_IP ) ? $cf : (string) ( $server['REMOTE_ADDR'] ?? '' );
+	$cf     = (string) ( $server['HTTP_CF_CONNECTING_IP'] ?? '' );
+	$remote = (string) ( $server['REMOTE_ADDR'] ?? '' );
+	// Only a request that really comes from a Cloudflare edge may name the visitor (code review 22-10: a direct call to
+	// the origin with a made-up header got a fresh rate-limit bucket per request).
+	return filter_var( $cf, FILTER_VALIDATE_IP ) && gbg_core_ip_in( $remote, gbg_core_cloudflare_ranges() ) ? $cf : $remote;
+}
+
+/** Cloudflare's published edge ranges (https://www.cloudflare.com/ips/, checked 22-10-2026). */
+function gbg_core_cloudflare_ranges(): array {
+	return array( '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18',
+		'190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14',
+		'172.64.0.0/13', '131.0.72.0/22', '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32',
+		'2a06:98c0::/29', '2c0f:f248::/32' );
+}
+
+/** True when $ip lies in one of the CIDR ranges (IPv4 and IPv6). Pure. */
+function gbg_core_ip_in( string $ip, array $cidrs ): bool {
+	$bin = @inet_pton( $ip ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+	if ( false === $bin ) {
+		return false;
+	}
+	foreach ( $cidrs as $c ) {
+		[ $net, $bits ] = explode( '/', $c ) + array( '', '0' );
+		$nb             = @inet_pton( $net ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+		if ( false === $nb || strlen( $nb ) !== strlen( $bin ) ) {
+			continue;
+		}
+		$bits  = (int) $bits;
+		$bytes = intdiv( $bits, 8 );
+		$rest  = $bits % 8;
+		if ( substr( $bin, 0, $bytes ) !== substr( $nb, 0, $bytes ) ) {
+			continue;
+		}
+		if ( 0 === $rest || ( ( ord( $bin[ $bytes ] ) ^ ord( $nb[ $bytes ] ) ) & ( 0xFF << ( 8 - $rest ) ) & 0xFF ) === 0 ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+/** Text from the visitor, sanitised and cut on characters (not bytes, so 'ç' or '—' at the edge survive). Pure. */
+function gbg_core_short_text( string $t, int $n ): string {
+	$t = sanitize_text_field( $t );
+	return function_exists( 'mb_substr' ) ? mb_substr( $t, 0, $n ) : substr( $t, 0, $n );
+}
+
+/** Beacon fields from the browser, each checked against what the page script can send (code review 22-10). Pure. */
+function gbg_core_ev_params( array $in ): array {
+	$out  = array();
+	$host = static fn( $v ) => preg_match( '/^[a-z0-9.-]{1,80}$/', strtolower( (string) $v ) ) ? strtolower( (string) $v ) : '';
+	if ( isset( $in['link_slug'] ) ) {
+		$out['link_slug'] = $host( $in['link_slug'] );
+	}
+	if ( isset( $in['link_domain'] ) ) {
+		$out['link_domain'] = $host( $in['link_domain'] );
+	}
+	if ( isset( $in['placement'] ) || isset( $in['link_slug'] ) ) {
+		$out['placement'] = gbg_core_placement( (string) ( $in['placement'] ?? '' ) );
+	}
+	if ( isset( $in['ab_test'] ) ) {
+		$out['ab_test'] = preg_match( '/^[a-z0-9]{1,20}:[a-z0-9]{1,5}$/', (string) $in['ab_test'] ) ? (string) $in['ab_test'] : '';
+	}
+	if ( isset( $in['link_text'] ) ) {
+		$out['link_text'] = gbg_core_short_text( (string) $in['link_text'], 80 );
+	}
+	if ( isset( $in['method'] ) ) {
+		$out['method'] = in_array( $in['method'], array( 'copy', 'native', 'pdf', 'pinterest', 'whatsapp', 'email', 'facebook', 'x' ), true ) ? (string) $in['method'] : 'other';
+	}
+	if ( isset( $in['item_id'] ) ) {
+		$out['item_id'] = preg_match( '#^/[a-z0-9/_.-]{0,150}$#i', (string) $in['item_id'] ) ? (string) $in['item_id'] : '';
+	}
+	if ( isset( $in['promo_code'] ) ) {
+		$out['promo_code'] = preg_match( '/^[A-Z0-9_-]{1,30}$/', (string) $in['promo_code'] ) ? (string) $in['promo_code'] : '';
+	}
+	return $out;
+}
+
+/** A link the site really has: a /go/ slug or an affiliate host (or its subdomain). */
+function gbg_core_known_link( string $slug ): bool {
+	$s = gbg_core_settings();
+	return '' !== $slug && 'consent' !== $slug && ( isset( $s['go_links'][ $slug ] )
+		|| gbg_core_host_allowed( $slug, array_merge( (array) $s['affiliate_hosts'], (array) $s['go_hosts'] ) ) );
 }
 
 /** Placement of a click: one of the names the page script sets, else 'unknown'. Pure. */
@@ -1976,7 +2065,8 @@ function gbg_core_go_track( string $target ): void {
 	if ( preg_match( '#/go/([a-z0-9-]+)#', strtolower( (string) wp_parse_url( $_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH ) ), $m ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 		$slug = $m[1];
 	}
-	$pl = explode( '|', (string) wp_unslash( $_COOKIE['gbg_pl'] ?? '' ), 4 ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+	// Fields are URI-encoded one by one before the join, so a '|' in a link text cannot shift them (code review 22-10).
+	$pl = array_map( 'rawurldecode', explode( '|', (string) wp_unslash( $_COOKIE['gbg_pl'] ?? '' ), 4 ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 	gbg_core_go_count( $slug, gbg_core_placement( (string) ( $pl[0] ?? '' ) ), (string) ( $_GET['s'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification,WordPress.Security.ValidatedSanitizedInput
 	gbg_core_mp_send(
 		'affiliate_click',
@@ -1986,7 +2076,7 @@ function gbg_core_go_track( string $target ): void {
 			// Cookie and Referer are the visitor's: only known values go to GA4 (code review 22-10).
 			'placement'     => gbg_core_placement( (string) ( $pl[0] ?? '' ) ),
 			'ab_test'       => preg_match( '/^[a-z0-9]{1,20}:[a-z0-9]{1,5}$/', (string) ( $pl[1] ?? '' ) ) ? (string) $pl[1] : '',
-			'link_text'     => substr( sanitize_text_field( (string) ( $pl[2] ?? '' ) ), 0, 80 ),
+			'link_text'     => gbg_core_short_text( (string) ( $pl[2] ?? '' ), 80 ),
 			'page_location' => gbg_core_own_url( (string) ( ( $pl[3] ?? '' ) ?: ( $_SERVER['HTTP_REFERER'] ?? '' ) ), (string) wp_parse_url( home_url(), PHP_URL_HOST ) ), // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 			'link_url'      => $target,
 		)
@@ -2016,13 +2106,16 @@ add_action(
 						return new WP_REST_Response( null, 429 );
 					}
 					set_transient( $rl, $rn + 1, 10 * MINUTE_IN_SECONDS );
-					$p                  = array_intersect_key( (array) ( $b['p'] ?? array() ), array_flip( array( 'link_slug', 'link_domain', 'placement', 'ab_test', 'link_text', 'method', 'item_id', 'promo_code' ) ) );
+					$p = gbg_core_ev_params( (array) ( $b['p'] ?? array() ) );
 					if ( 'consent' === $n ) { // anonymous count of the banner choice (shown / allow / deny), never sent to GA4
 						gbg_core_go_count( 'consent', in_array( $b['p']['status'] ?? '', array( 'shown', 'allow', 'deny', 'custom' ), true ) ? (string) $b['p']['status'] : 'unknown' );
 						return new WP_REST_Response( null, 204 );
 					}
 					if ( 'affiliate_click' === $n ) {
-						gbg_core_go_count( (string) ( $p['link_slug'] ?? '' ), (string) ( $p['placement'] ?? '' ) ?: 'unknown' );
+						if ( ! gbg_core_known_link( (string) ( $p['link_slug'] ?? '' ) ) ) {
+							return new WP_REST_Response( null, 204 ); // only links the site really has are counted and sent
+						}
+						gbg_core_go_count( (string) $p['link_slug'], (string) $p['placement'] );
 					}
 					$p['page_location'] = gbg_core_own_url( (string) ( $b['l'] ?? '' ), (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
 					gbg_core_mp_send( $n, $p );
@@ -2099,7 +2192,8 @@ add_action(
 							continue;
 						}
 						// wp_safe_remote_get refuses private/internal addresses on every hop (no SSRF via a redirect).
-						$r     = wp_safe_remote_get( $url, array( 'timeout' => 5, 'redirection' => 2, 'limit_response_size' => 200000, 'user-agent' => 'Mozilla/5.0 (compatible; GoBackpackGo link check)' ) );
+						$left  = max( 1, (int) floor( $stop - microtime( true ) ) );
+						$r     = wp_safe_remote_get( $url, array( 'timeout' => min( 5, $left ), 'redirection' => 5, 'limit_response_size' => 200000, 'user-agent' => 'Mozilla/5.0 (compatible; GoBackpackGo link check)' ) );
 						$body  = is_wp_error( $r ) ? '' : (string) wp_remote_retrieve_body( $r );
 						$title = preg_match( '#<title[^>]*>(.*?)</title>#is', $body, $m ) ? trim( wp_strip_all_tags( $m[1] ) ) : '';
 						$out[] = array( 'url' => $url, 'status' => is_wp_error( $r ) ? $r->get_error_message() : wp_remote_retrieve_response_code( $r ), 'title' => substr( $title, 0, 120 ) );
@@ -2140,12 +2234,51 @@ function gbg_core_go_count_add( array $counts, string $day, string $slug, string
 	return $counts;
 }
 
+function gbg_core_clicks_table(): string {
+	global $wpdb;
+	return $wpdb->prefix . 'gbg_clicks';
+}
+
+// Own table with one row per day and key (code review 22-10): an atomic +1 instead of rewriting one growing option.
+function gbg_core_clicks_install(): void {
+	if ( '1' === get_option( 'gbg_core_clicks_db' ) ) {
+		return;
+	}
+	global $wpdb;
+	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+	$table = gbg_core_clicks_table();
+	dbDelta(
+		"CREATE TABLE $table (
+		day date NOT NULL,
+		k varchar(120) NOT NULL,
+		n int(10) unsigned NOT NULL DEFAULT 0,
+		PRIMARY KEY  (day,k)
+		) {$wpdb->get_charset_collate()};"
+	);
+	update_option( 'gbg_core_clicks_db', '1', false );
+}
+
+/** The counter key: link|placement[|page]; '' when the link is empty. Pure. */
+function gbg_core_go_count_key( string $slug, string $placement, string $page = '' ): string {
+	$k = array_keys( gbg_core_go_count_add( array(), '2000-01-01', $slug, $placement, 120, $page )['2000-01-01'] ?? array() );
+	return $k[0] ?? '';
+}
+
 function gbg_core_go_count( string $slug, string $placement, string $page = '' ): void {
 	if ( is_user_logged_in() || gbg_core_is_bot( (string) ( $_SERVER['HTTP_USER_AGENT'] ?? '' ) ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 		return;
 	}
-	$counts = get_option( 'gbg_core_go_counts', array() );
-	update_option( 'gbg_core_go_counts', gbg_core_go_count_add( is_array( $counts ) ? $counts : array(), gmdate( 'Y-m-d' ), $slug, $placement, 120, $page ), false );
+	$key = gbg_core_go_count_key( $slug, $placement, $page );
+	if ( '' === $key ) {
+		return;
+	}
+	global $wpdb;
+	gbg_core_clicks_install();
+	$table = gbg_core_clicks_table();
+	$wpdb->query( $wpdb->prepare( "INSERT INTO $table (day, k, n) VALUES (%s, %s, 1) ON DUPLICATE KEY UPDATE n = n + 1", gmdate( 'Y-m-d' ), $key ) ); // phpcs:ignore WordPress.DB
+	if ( 1 === wp_rand( 1, 500 ) ) { // now and then: drop days older than 120
+		$wpdb->query( $wpdb->prepare( "DELETE FROM $table WHERE day < %s", gmdate( 'Y-m-d', time() - 120 * DAY_IN_SECONDS ) ) ); // phpcs:ignore WordPress.DB
+	}
 }
 
 add_action(
@@ -2160,8 +2293,16 @@ add_action(
 				'callback'            => static function ( WP_REST_Request $request ) {
 					$days   = max( 1, min( 120, (int) ( $request->get_param( 'days' ) ?: 30 ) ) );
 					$cut    = gmdate( 'Y-m-d', time() - $days * 86400 );
-					$counts = (array) get_option( 'gbg_core_go_counts', array() );
-					return array( 'days' => $days, 'counts' => array_filter( $counts, static fn( $d ) => $d > $cut, ARRAY_FILTER_USE_KEY ) );
+					$counts = array_filter( (array) get_option( 'gbg_core_go_counts', array() ), static fn( $d ) => $d > $cut, ARRAY_FILTER_USE_KEY ); // before 0.3.36
+					global $wpdb;
+					if ( '1' === get_option( 'gbg_core_clicks_db' ) ) {
+						$table = gbg_core_clicks_table();
+						foreach ( (array) $wpdb->get_results( $wpdb->prepare( "SELECT day, k, n FROM $table WHERE day > %s", $cut ), ARRAY_A ) as $r ) { // phpcs:ignore WordPress.DB
+							$counts[ $r['day'] ][ $r['k'] ] = ( $counts[ $r['day'] ][ $r['k'] ] ?? 0 ) + (int) $r['n'];
+						}
+					}
+					ksort( $counts );
+					return array( 'days' => $days, 'counts' => $counts );
 				},
 			)
 		);
