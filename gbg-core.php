@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.34
+ * Version: 0.3.35
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.34';
+const GBG_CORE_VERSION = '0.3.35';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -1943,6 +1943,11 @@ function gbg_core_client_ip( array $server ): string {
 	return filter_var( $cf, FILTER_VALIDATE_IP ) ? $cf : (string) ( $server['REMOTE_ADDR'] ?? '' );
 }
 
+/** Placement of a click: one of the names the page script sets, else 'unknown'. Pure. */
+function gbg_core_placement( string $p ): string {
+	return in_array( $p, array( 'content', 'button', 'promo', 'ab', 'sticky', 'header', 'footer' ), true ) ? $p : 'unknown';
+}
+
 /** Keeps a page URL only when it is on our own host (GA4 page_location from the browser or a Referer); else ''. Pure. */
 function gbg_core_own_url( string $url, string $own_host ): string {
 	$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
@@ -1972,16 +1977,17 @@ function gbg_core_go_track( string $target ): void {
 		$slug = $m[1];
 	}
 	$pl = explode( '|', (string) wp_unslash( $_COOKIE['gbg_pl'] ?? '' ), 4 ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
-	gbg_core_go_count( $slug, ( $pl[0] ?? '' ) ?: 'unknown', (string) ( $_GET['s'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification,WordPress.Security.ValidatedSanitizedInput
+	gbg_core_go_count( $slug, gbg_core_placement( (string) ( $pl[0] ?? '' ) ), (string) ( $_GET['s'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification,WordPress.Security.ValidatedSanitizedInput
 	gbg_core_mp_send(
 		'affiliate_click',
 		array(
 			'link_slug'     => $slug,
 			'link_domain'   => preg_replace( '/^www\./', '', strtolower( (string) wp_parse_url( $target, PHP_URL_HOST ) ) ),
-			'placement'     => $pl[0] ?? '' ?: 'unknown',
-			'ab_test'       => $pl[1] ?? '',
-			'link_text'     => $pl[2] ?? '',
-			'page_location' => ( $pl[3] ?? '' ) ?: (string) ( $_SERVER['HTTP_REFERER'] ?? '' ), // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+			// Cookie and Referer are the visitor's: only known values go to GA4 (code review 22-10).
+			'placement'     => gbg_core_placement( (string) ( $pl[0] ?? '' ) ),
+			'ab_test'       => preg_match( '/^[a-z0-9]{1,20}:[a-z0-9]{1,5}$/', (string) ( $pl[1] ?? '' ) ) ? (string) $pl[1] : '',
+			'link_text'     => substr( sanitize_text_field( (string) ( $pl[2] ?? '' ) ), 0, 80 ),
+			'page_location' => gbg_core_own_url( (string) ( ( $pl[3] ?? '' ) ?: ( $_SERVER['HTTP_REFERER'] ?? '' ) ), (string) wp_parse_url( home_url(), PHP_URL_HOST ) ), // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 			'link_url'      => $target,
 		)
 	);
@@ -2080,14 +2086,20 @@ add_action(
 				'callback'            => static function ( WP_REST_Request $request ) {
 					$hosts = array_merge( (array) gbg_core_settings()['go_hosts'], array( 'discovercars.com', 'yesim.app', 'ye-sim.app', 'yesim.tech', 'airalo.com', 'airhelp.com', 'klook.com', 'getyourguide.com' ) );
 					$out   = array();
+					$stop  = microtime( true ) + 30; // never hold a PHP worker longer than ~30 s (shared server)
 					foreach ( array_slice( (array) ( $request->get_json_params()['urls'] ?? array() ), 0, 20 ) as $url ) {
+						if ( microtime( true ) > $stop ) {
+							$out[] = array( 'url' => (string) $url, 'status' => 'skipped: time budget' );
+							continue;
+						}
 						$url  = (string) $url;
 						$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
 						if ( ! str_starts_with( $url, 'https://' ) || ! gbg_core_host_allowed( preg_replace( '/^www\./', '', $host ), $hosts ) ) {
 							$out[] = array( 'url' => $url, 'status' => 'host not allowed' );
 							continue;
 						}
-						$r     = wp_remote_get( $url, array( 'timeout' => 10, 'redirection' => 5, 'limit_response_size' => 200000, 'user-agent' => 'Mozilla/5.0 (compatible; GoBackpackGo link check)' ) );
+						// wp_safe_remote_get refuses private/internal addresses on every hop (no SSRF via a redirect).
+						$r     = wp_safe_remote_get( $url, array( 'timeout' => 5, 'redirection' => 2, 'limit_response_size' => 200000, 'user-agent' => 'Mozilla/5.0 (compatible; GoBackpackGo link check)' ) );
 						$body  = is_wp_error( $r ) ? '' : (string) wp_remote_retrieve_body( $r );
 						$title = preg_match( '#<title[^>]*>(.*?)</title>#is', $body, $m ) ? trim( wp_strip_all_tags( $m[1] ) ) : '';
 						$out[] = array( 'url' => $url, 'status' => is_wp_error( $r ) ? $r->get_error_message() : wp_remote_retrieve_response_code( $r ), 'title' => substr( $title, 0, 120 ) );
