@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.45
+ * Version: 0.3.46
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.45';
+const GBG_CORE_VERSION = '0.3.46';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -101,6 +101,8 @@ function gbg_core_defaults(): array {
 		// 0.3.43: robots.txt keeps Baiduspider to the English and Chinese pages (Paul 22-10: it crawled all GTranslate
 		// languages, ~260 real visits a year come from Baidu, all of them kept).
 		'baidu_limit'        => false,
+		// 0.3.46: replace the Afghan city list in the coverage FAQ of the generated eSIM country pages.
+		'esim_faq_fix'       => false,
 	);
 }
 
@@ -115,7 +117,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -955,6 +957,7 @@ add_action(
 						$stored = get_option( GBG_CORE_OPTION, array() );
 						$merged = array_merge( is_array( $stored ) ? $stored : array(), gbg_core_sanitize( $input ) );
 						update_option( GBG_CORE_OPTION, $merged, false );
+						gbg_core_settings( true ); // the sync below must see the values just saved (22-10: first save on live kept the old file)
 						$robots = gbg_core_sync_robots_file();
 						// Front-end features (A/B tests, share bar, opt-in) live in the page HTML: empty the page cache so visitors get them.
 						do_action( 'breeze_clear_all_cache' );
@@ -2655,6 +2658,265 @@ add_action(
 					ksort( $counts );
 					return array( 'days' => $days, 'counts' => $counts );
 				},
+			)
+		);
+	}
+);
+
+/* -------------------------------------------------------------------------
+ * eSIM pages 2.0 (0.3.46, Paul 22-10). Data from the weekly Yesim check (scripts/yesim_check.py) instead of text typed
+ * into ~800 pages: the Monday run sends from-prices per page and the compatible-device list with POST /gbg/v1/esim-data,
+ * and the shared Impreza block shows them through [gbg_esim_price], [gbg_esim_devices] and [gbg_esim_checked].
+ * Shared blocks (us_page_block) are not in the WordPress REST API, so /gbg/v1/page-block reads and writes one, keeping
+ * the last 10 versions as post meta (restore with /page-block/restore). esim_faq_fix replaces the Afghan city list that
+ * the page generator put into the coverage FAQ of every country page.
+ * ---------------------------------------------------------------------- */
+
+const GBG_CORE_ESIM_OPTION    = 'gbg_core_esim_data';
+const GBG_CORE_BLOCK_TYPES    = array( 'us_page_block', 'wp_block' );
+const GBG_CORE_BLOCK_BACKUPS  = 10;
+const GBG_CORE_ESIM_FAQ_WRONG = 'in urban areas like Kabul, Kandahar, Herat, Mazar-i-Sharif, Jalalabad, Kunduz, Ghazni, as well as popular tourist destinations';
+
+function gbg_core_esim_data(): array {
+	$d = get_option( GBG_CORE_ESIM_OPTION, array() );
+	return is_array( $d ) ? $d : array();
+}
+
+function gbg_core_esim_sanitize( array $in ): array {
+	$out = array(
+		'checked' => preg_match( '/^\d{4}-\d{2}-\d{2}$/', (string) ( $in['checked'] ?? '' ) ) ? (string) $in['checked'] : '',
+		'source'  => esc_url_raw( (string) ( $in['source'] ?? '' ) ),
+		'pages'   => array(),
+		'devices' => array(),
+	);
+	$money = static fn( $v ) => is_numeric( $v ) && $v > 0 && $v < 1000 ? round( (float) $v, 2 ) : null;
+	foreach ( array_slice( (array) ( $in['pages'] ?? array() ), 0, 3000, true ) as $slug => $p ) {
+		$p = (array) $p;
+		if ( sanitize_title( (string) $slug ) !== (string) $slug || '' === (string) $slug ) {
+			continue;
+		}
+		$row = array(
+			'country' => substr( sanitize_text_field( (string) ( $p['country'] ?? '' ) ), 0, 60 ),
+			'day'     => $money( $p['day'] ?? null ),
+			'gb'      => $money( $p['gb'] ?? null ),
+		);
+		if ( $row['day'] || $row['gb'] ) {
+			$out['pages'][ (string) $slug ] = $row;
+		}
+	}
+	foreach ( array_slice( (array) ( $in['devices'] ?? array() ), 0, 40 ) as $g ) {
+		$g      = (array) $g;
+		$name   = substr( sanitize_text_field( (string) ( $g['group'] ?? '' ) ), 0, 60 );
+		$models = array_values( array_filter( array_map( static fn( $m ) => substr( sanitize_text_field( (string) $m ), 0, 80 ), array_slice( (array) ( $g['models'] ?? array() ), 0, 400 ) ) ) );
+		if ( '' !== $name && $models ) {
+			$out['devices'][] = array( 'group' => $name, 'models' => $models );
+		}
+	}
+	return $out;
+}
+
+/** "22 October 2026" for a Y-m-d date (English: the pages are English; GTranslate translates the rest). */
+function gbg_core_esim_date( string $ymd ): string {
+	$t = strtotime( $ymd . ' 12:00:00 UTC' );
+	return $t ? gmdate( 'j F Y', $t ) : '';
+}
+
+function gbg_core_euro( float $v ): string {
+	return '€' . number_format( $v, 2, '.', ',' );
+}
+
+add_shortcode(
+	'gbg_esim_price',
+	static function () {
+		$d    = gbg_core_esim_data();
+		$slug = (string) get_post_field( 'post_name', (int) get_the_ID() );
+		$p    = $d['pages'][ $slug ] ?? null;
+		if ( ! $p || ! $d['checked'] ) {
+			return '';
+		}
+		$main = $p['day'] ? gbg_core_euro( $p['day'] ) . ' per day' : gbg_core_euro( $p['gb'] ) . ' per GB';
+		$alt  = $p['day'] && $p['gb'] ? ' (or ' . gbg_core_euro( $p['gb'] ) . ' per GB)' : '';
+		$for  = $p['country'] ? ' for ' . esc_html( $p['country'] ) : '';
+		return '<p class="gbg-esim-price">eSIM' . $for . ' from <strong>' . esc_html( $main ) . '</strong>' . esc_html( $alt )
+			. ' at Yesim <span class="gbg-esim-checked">(price checked ' . esc_html( gbg_core_esim_date( $d['checked'] ) ) . ')</span></p>';
+	}
+);
+
+add_shortcode(
+	'gbg_esim_checked',
+	static function ( $atts ) {
+		$atts = shortcode_atts( array( 'format' => 'day' ), $atts );
+		$d    = gbg_core_esim_data();
+		if ( empty( $d['checked'] ) ) {
+			return '';
+		}
+		$t = strtotime( $d['checked'] . ' 12:00:00 UTC' );
+		return esc_html( 'month' === $atts['format'] ? gmdate( 'F Y', $t ) : gbg_core_esim_date( $d['checked'] ) );
+	}
+);
+
+add_shortcode(
+	'gbg_esim_devices',
+	static function () {
+		$d = gbg_core_esim_data();
+		if ( empty( $d['devices'] ) ) {
+			return '';
+		}
+		$html = '<div class="gbg-esim-devices">';
+		foreach ( $d['devices'] as $g ) {
+			$html .= '<p><strong>' . esc_html( $g['group'] ) . ':</strong> ' . esc_html( implode( ', ', $g['models'] ) ) . '</p>';
+		}
+		return $html . '</div>';
+	}
+);
+
+add_filter(
+	'the_content',
+	static function ( $content ) {
+		if ( ! is_string( $content ) || ! str_contains( $content, 'Kabul, Kandahar' ) || empty( gbg_core_settings()['esim_faq_fix'] ) ) {
+			return $content;
+		}
+		if ( str_starts_with( (string) get_post_field( 'post_name', (int) get_the_ID() ), 'esim-afghanistan' ) ) {
+			return $content; // right on the Afghanistan page itself
+		}
+		return str_replace( GBG_CORE_ESIM_FAQ_WRONG, 'in cities and towns as well as popular tourist destinations', $content );
+	},
+	9
+);
+
+function gbg_core_block_post( int $id ) {
+	$post = $id ? get_post( $id ) : null;
+	if ( ! $post || ! in_array( $post->post_type, GBG_CORE_BLOCK_TYPES, true ) ) {
+		return new WP_Error( 'gbg_core_no_block', 'Not a shared block (us_page_block or wp_block).', array( 'status' => 404 ) );
+	}
+	return $post;
+}
+
+function gbg_core_block_info( WP_Post $post ): array {
+	global $wpdb;
+	$like = '%' . $wpdb->esc_like( '[us_page_block id="' . $post->ID . '"' ) . '%';
+	$used = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->posts} WHERE post_status = 'publish' AND post_content LIKE %s", $like ) ); // phpcs:ignore WordPress.DB
+	$back = array_map( static fn( $b ) => $b['at'] ?? '', (array) get_post_meta( $post->ID, '_gbg_core_backup', false ) );
+	return array(
+		'id'       => $post->ID,
+		'type'     => $post->post_type,
+		'title'    => $post->post_title,
+		'modified' => $post->post_modified_gmt,
+		'used_by'  => $used,
+		'backups'  => $back,
+		'content'  => $post->post_content,
+	);
+}
+
+/** Writes a block after keeping its current content as a backup (newest GBG_CORE_BLOCK_BACKUPS kept). */
+function gbg_core_block_write( WP_Post $post, string $content ) {
+	add_post_meta( $post->ID, '_gbg_core_backup', array( 'at' => gmdate( 'c' ), 'content' => $post->post_content ) );
+	$all = (array) get_post_meta( $post->ID, '_gbg_core_backup', false );
+	foreach ( array_slice( $all, 0, max( 0, count( $all ) - GBG_CORE_BLOCK_BACKUPS ) ) as $old ) {
+		delete_post_meta( $post->ID, '_gbg_core_backup', $old );
+	}
+	$res = wp_update_post( array( 'ID' => $post->ID, 'post_content' => wp_slash( $content ) ), true );
+	if ( is_wp_error( $res ) ) {
+		return $res;
+	}
+	clean_post_cache( $post->ID );
+	do_action( 'breeze_clear_all_cache' ); // the block is inlined in cached pages
+	return gbg_core_block_info( get_post( $post->ID ) );
+}
+
+add_action(
+	'rest_api_init',
+	static function () {
+		register_rest_route(
+			'gbg/v1',
+			'/page-block',
+			array(
+				array(
+					'methods'             => 'GET',
+					'permission_callback' => 'gbg_core_can_manage',
+					'callback'            => static function ( WP_REST_Request $request ) {
+						$post = gbg_core_block_post( absint( $request->get_param( 'id' ) ) );
+						return is_wp_error( $post ) ? $post : gbg_core_block_info( $post );
+					},
+				),
+				array(
+					'methods'             => 'POST',
+					'permission_callback' => 'gbg_core_can_manage',
+					'callback'            => static function ( WP_REST_Request $request ) {
+						$in   = (array) $request->get_json_params();
+						$post = gbg_core_block_post( absint( $in['id'] ?? 0 ) );
+						if ( is_wp_error( $post ) ) {
+							return $post;
+						}
+						if ( ! isset( $in['content'] ) || ! is_string( $in['content'] ) || '' === trim( $in['content'] ) ) {
+							return new WP_Error( 'gbg_core_bad_body', 'Send id and a non-empty content.', array( 'status' => 400 ) );
+						}
+						if ( ! empty( $in['expect_modified'] ) && $in['expect_modified'] !== $post->post_modified_gmt ) {
+							return new WP_Error( 'gbg_core_changed', 'The block changed since you read it; read it again.', array( 'status' => 409 ) );
+						}
+						return gbg_core_block_write( $post, $in['content'] );
+					},
+				),
+			)
+		);
+		register_rest_route(
+			'gbg/v1',
+			'/page-block/restore',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => 'gbg_core_can_manage',
+				'callback'            => static function ( WP_REST_Request $request ) {
+					$in   = (array) $request->get_json_params();
+					$post = gbg_core_block_post( absint( $in['id'] ?? 0 ) );
+					if ( is_wp_error( $post ) ) {
+						return $post;
+					}
+					foreach ( (array) get_post_meta( $post->ID, '_gbg_core_backup', false ) as $b ) {
+						if ( ( $b['at'] ?? '' ) === ( $in['at'] ?? null ) ) {
+							return gbg_core_block_write( $post, (string) $b['content'] );
+						}
+					}
+					return new WP_Error( 'gbg_core_no_backup', 'No backup with that time; see backups in GET /page-block.', array( 'status' => 404 ) );
+				},
+			)
+		);
+		register_rest_route(
+			'gbg/v1',
+			'/esim-data',
+			array(
+				array(
+					'methods'             => 'GET',
+					'permission_callback' => 'gbg_core_can_manage',
+					'callback'            => static function () {
+						$d = gbg_core_esim_data();
+						return array(
+							'checked' => $d['checked'] ?? '',
+							'pages'   => count( (array) ( $d['pages'] ?? array() ) ),
+							'devices' => array_sum( array_map( static fn( $g ) => count( $g['models'] ), (array) ( $d['devices'] ?? array() ) ) ),
+						);
+					},
+				),
+				array(
+					'methods'             => 'POST',
+					'permission_callback' => 'gbg_core_can_manage',
+					'callback'            => static function ( WP_REST_Request $request ) {
+						$in = $request->get_json_params();
+						if ( ! is_array( $in ) ) {
+							return new WP_Error( 'gbg_core_bad_body', 'Send a JSON object.', array( 'status' => 400 ) );
+						}
+						$d = gbg_core_esim_sanitize( $in );
+						if ( ! $d['checked'] ) {
+							return new WP_Error( 'gbg_core_bad_body', 'checked (Y-m-d) is required.', array( 'status' => 400 ) );
+						}
+						update_option( GBG_CORE_ESIM_OPTION, $d, false );
+						do_action( 'breeze_clear_all_cache' );
+						return array(
+							'checked' => $d['checked'],
+							'pages'   => count( $d['pages'] ),
+							'devices' => array_sum( array_map( static fn( $g ) => count( $g['models'] ), $d['devices'] ) ),
+						);
+					},
+				),
 			)
 		);
 	}
