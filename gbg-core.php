@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.51
+ * Version: 0.3.52
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.51';
+const GBG_CORE_VERSION = '0.3.52';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 /**
@@ -773,7 +773,7 @@ function gbg_core_health(): array {
 		'go_links'           => array_keys( (array) gbg_core_settings()['go_links'] ),
 		'go_country'         => array_map( 'count', (array) gbg_core_settings()['go_country'] ),
 		'go_pages'           => count( (array) gbg_core_settings()['go_pages'] ),
-		'ga4_mp'             => array( 'measurement_id' => gbg_core_settings()['ga4_measurement_id'], 'secret_set' => '' !== (string) get_option( 'gbg_core_ga4_secret', '' ), 'track_enabled' => gbg_core_settings()['track_enabled'], 'today' => get_transient( 'gbg_core_mp_stats' ) ?: array() ),
+		'ga4_mp'             => array( 'measurement_id' => gbg_core_settings()['ga4_measurement_id'], 'secret_set' => '' !== (string) get_option( 'gbg_core_ga4_secret', '' ), 'mode' => GBG_CORE_LIVE_HOST === strtolower( (string) wp_parse_url( home_url(), PHP_URL_HOST ) ) ? 'collect' : 'debug (not recorded)', 'track_enabled' => gbg_core_settings()['track_enabled'], 'today' => get_transient( 'gbg_core_mp_stats' ) ?: array() ),
 		'promos'             => array_map( static fn( $p ) => $p['merchant'] . ' ' . $p['code'] . ' ' . $p['until'], (array) gbg_core_settings()['promos'] ),
 		'anonymous_selftest' => gbg_core_anon_selftest(),
 		'theme'              => wp_get_theme()->get_template() . ' ' . wp_get_theme( get_template() )->get( 'Version' ),
@@ -875,7 +875,7 @@ add_action(
 			. "if(v['class'])el.className+=' '+v['class'];"
 			. "[].slice.call(el.tagName==='A'?[el]:el.querySelectorAll('a')).forEach(function(a){try{var u=new URL(a.href);"
 			. "if(u.searchParams.has('sub_id')){u.searchParams.set('sub_id',u.searchParams.get('sub_id')+'-'+t.id+v.key);a.href=u.toString()}}catch(x){}});"
-			. "el.addEventListener('click',function(){send(t.id,v.key,'click')})});"
+			. "var ck=function(e){if(e.type!=='auxclick'||e.button===1)send(t.id,v.key,'click')};el.addEventListener('click',ck);el.addEventListener('auxclick',ck)});"
 			. "if(Math.random()*t.sample<1)send(t.id,v.key,'view')})})(" . $cfg . ');</script>'; // phpcs:ignore WordPress.Security.EscapeOutput
 	},
 	99
@@ -2146,7 +2146,8 @@ function gbg_core_track_script(): string {
 	$cfg = gbg_core_track_config() + array( 'u' => esc_url_raw( rest_url( 'gbg/v1/ev' ) ) );
 	return '<script id="gbg-track">(function(c){window.gbgEv=function(n,p){p=p||{};window.dataLayer=window.dataLayer||[];var o={event:"gbg_"+n};for(var k in p)o[k]=p[k];dataLayer.push(o);'
 		. 'try{navigator.sendBeacon(c.u,JSON.stringify({n:n,p:p,l:location.href}))}catch(x){}};'
-		. 'document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href]");if(!a)return;var u;try{u=new URL(a.href,location.href)}catch(x){return}'
+		// Middle-click (open in new tab) counts too (0.3.52).
+		. 'var h=function(e){if(e.type==="auxclick"&&e.button!==1)return;var a=e.target.closest&&e.target.closest("a[href]");if(!a)return;var u;try{u=new URL(a.href,location.href)}catch(x){return}'
 		. 'var m=u.pathname.match(/^\/(?:[a-z]{2}(?:-[a-z]{2,4})?\/)?go\/([a-z0-9-]+)/i),slug=m?m[1].toLowerCase():"",host=u.hostname.replace(/^www\./,"").toLowerCase();'
 		. 'if(slug){if(u.hostname!==location.hostname)return;host=c.g[slug]||"go"}else if(!c.h.some(function(h){return host===h||host.slice(-h.length-1)==="."+h}))return;'
 		. 'var ab=a.closest("[data-gbg-ab]"),pl=a.closest(".gbg-promo")?"promo":ab?"ab":a.closest("footer,.l-footer")?"footer":a.closest("header,.l-header")?"header":'
@@ -2154,7 +2155,8 @@ function gbg_core_track_script(): string {
 		. 'p={link_slug:slug||host,link_domain:host,placement:pl,ab_test:ab?ab.getAttribute("data-gbg-ab"):"",link_text:(a.textContent||a.getAttribute("aria-label")||"").replace(/\s+/g," ").trim().slice(0,80)};'
 		// /go/ links are counted by the server on the redirect (reliable); the page only hands over where the click was.
 		. 'if(slug){document.cookie="gbg_pl="+encodeURIComponent([p.placement,p.ab_test,p.link_text,location.href].map(encodeURIComponent).join("|"))+";path=/;max-age=60;SameSite=Lax";'
-		. 'var o={event:"gbg_affiliate_click"};for(var k in p)o[k]=p[k];(window.dataLayer=window.dataLayer||[]).push(o)}else{gbgEv("affiliate_click",p)}},true);'
+		. 'var o={event:"gbg_affiliate_click"};for(var k in p)o[k]=p[k];(window.dataLayer=window.dataLayer||[]).push(o)}else{gbgEv("affiliate_click",p)}};'
+		. 'document.addEventListener("click",h,true);document.addEventListener("auxclick",h,true);'
 		// Cookie banner choice, counted anonymously (no cookie, no GA4): shown once per page view, then the button pressed.
 		. 'var cs=function(st){try{navigator.sendBeacon(c.u,JSON.stringify({n:"consent",p:{status:st}}))}catch(x){}};'
 		. 'setTimeout(function(){var b=document.querySelector(".cmplz-cookiebanner"),r=b&&b.getBoundingClientRect(),st=b&&getComputedStyle(b);'
@@ -2292,13 +2294,24 @@ function gbg_core_known_link( string $slug ): bool {
 
 /** Placement of a click: one of the names the page script sets, else 'unknown'. Pure. */
 function gbg_core_placement( string $p ): string {
-	return in_array( $p, array( 'content', 'button', 'promo', 'ab', 'sticky', 'header', 'footer' ), true ) ? $p : 'unknown';
+	return in_array( $p, array( 'content', 'button', 'promo', 'ab', 'sticky', 'header', 'footer', 'nojs' ), true ) ? $p : 'unknown';
 }
 
 /** Keeps a page URL only when it is on our own host (GA4 page_location from the browser or a Referer); else ''. Pure. */
 function gbg_core_own_url( string $url, string $own_host ): string {
 	$host = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
 	return '' !== $own_host && $host === strtolower( $own_host ) && in_array( wp_parse_url( $url, PHP_URL_SCHEME ), array( 'http', 'https' ), true ) ? $url : '';
+}
+
+const GBG_CORE_LIVE_HOST = 'gobackpackgo.com';
+
+/**
+ * Measurement Protocol URL. Staging shares the GA4 property with live, so any other host sends to the validation
+ * endpoint (/debug/mp/collect): the event is checked, never recorded (0.3.52). Pure.
+ */
+function gbg_core_mp_url( string $host, string $measurement_id, string $secret ): string {
+	$path = GBG_CORE_LIVE_HOST === strtolower( $host ) ? '/mp/collect' : '/debug/mp/collect';
+	return 'https://www.google-analytics.com' . $path . '?measurement_id=' . rawurlencode( $measurement_id ) . '&api_secret=' . rawurlencode( $secret );
 }
 
 function gbg_core_mp_send( string $name, array $params ): bool {
@@ -2311,7 +2324,7 @@ function gbg_core_mp_send( string $name, array $params ): bool {
 	}
 	gbg_core_mp_stat( $name, 'sent' );
 	wp_remote_post(
-		'https://www.google-analytics.com/mp/collect?measurement_id=' . rawurlencode( $s['ga4_measurement_id'] ) . '&api_secret=' . rawurlencode( $secret ),
+		gbg_core_mp_url( (string) wp_parse_url( home_url(), PHP_URL_HOST ), $s['ga4_measurement_id'], $secret ),
 		array( 'body' => wp_json_encode( gbg_core_mp_payload( $ids, $name, $params ) ), 'headers' => array( 'Content-Type' => 'application/json' ), 'timeout' => 2, 'blocking' => false )
 	);
 	return true;
@@ -2325,6 +2338,11 @@ function gbg_core_go_track( string $target ): void {
 	}
 	// Fields are URI-encoded one by one before the join, so a '|' in a link text cannot shift them (code review 22-10).
 	$pl = array_map( 'rawurldecode', explode( '|', (string) wp_unslash( $_COOKIE['gbg_pl'] ?? '' ), 4 ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+	// No cookie from the page script = nobody clicked on a page (0.3.52): crawlers that follow /go/ links, prefetchers,
+	// links shared elsewhere. Counted as 'nojs', apart from readers, instead of 'unknown'.
+	if ( ! isset( $_COOKIE['gbg_pl'] ) ) {
+		$pl[0] = 'nojs';
+	}
 	gbg_core_go_count( $slug, gbg_core_placement( (string) ( $pl[0] ?? '' ) ), (string) ( $_GET['s'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification,WordPress.Security.ValidatedSanitizedInput
 	gbg_core_mp_send(
 		'affiliate_click',
