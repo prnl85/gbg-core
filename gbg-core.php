@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.61
+ * Version: 0.3.62
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.61';
+const GBG_CORE_VERSION = '0.3.62';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -562,8 +562,11 @@ add_action(
 );
 
 /* -------------------------------------------------------------------------
- * [arve] fallback (0.3.61): 7 old posts embed videos with the ARVE plugin, which is no longer active, so readers saw the
- * raw shortcode. Without ARVE the shortcode becomes a light link to the video with a real anchor text.
+ * [arve] fallback (0.3.61, player 0.3.62): old posts embed videos with the ARVE plugin, which is no longer active, so
+ * readers saw the raw shortcode. Without ARVE a YouTube shortcode becomes a light player: the own thumbnail with a play
+ * button and a caption link; the youtube-nocookie iframe only loads on click (no YouTube requests or cookies before
+ * that, no weight for page speed). Without JavaScript the thumbnail and caption link to the video. VideoObject JSON-LD
+ * from the shortcode's name/description/upload_date/thumbnail. Vimeo and others stay a plain link.
  * ---------------------------------------------------------------------- */
 
 /** Link HTML for an [arve] shortcode; '' when the URL is not YouTube/Vimeo. Pure apart from escaping. */
@@ -579,11 +582,78 @@ function gbg_core_arve_link( array $atts ): string {
 	return '<p class="gbg-video-link"><a href="' . esc_url( $url ) . '" target="_blank" rel="noopener">' . esc_html( $text ) . ' (' . $host . ')</a></p>';
 }
 
+/** YouTube video id from youtu.be/ID, youtube.com/watch?v=ID, /embed/ID or /shorts/ID; '' otherwise. */
+function gbg_core_youtube_id( string $url ): string {
+	if ( preg_match( '#^https?://(?:www\.|m\.)?(?:youtu\.be/|youtube(?:-nocookie)?\.com/(?:embed/|shorts/|v/|watch\?(?:[^\#]*&)?v=))([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])#i', $url, $m ) ) {
+		return $m[1];
+	}
+	return '';
+}
+
+/** Player HTML for an [arve] shortcode on $own_host; falls back to gbg_core_arve_link() for non-YouTube URLs. */
+function gbg_core_arve_player( array $atts, string $own_host ): string {
+	$id = gbg_core_youtube_id( (string) ( $atts['url'] ?? '' ) );
+	if ( '' === $id ) {
+		return gbg_core_arve_link( $atts );
+	}
+	$title = trim( (string) ( $atts['title'] ?? $atts['name'] ?? '' ) );
+	$title = '' !== $title ? ucfirst( $title ) : 'Our video';
+	$watch = 'https://www.youtube.com/watch?v=' . $id;
+	$thumb = (string) ( $atts['thumbnail'] ?? '' );
+	$th    = strtolower( (string) wp_parse_url( $thumb, PHP_URL_HOST ) );
+	if ( ! preg_match( '#^https://#i', $thumb ) || '' === $own_host || $th !== strtolower( $own_host ) ) {
+		$thumb = 'https://i.ytimg.com/vi/' . $id . '/hqdefault.jpg';
+	}
+	$ld = array(
+		'@context'     => 'https://schema.org',
+		'@type'        => 'VideoObject',
+		'name'         => $title,
+		'description'  => trim( (string) ( $atts['description'] ?? '' ) ) ?: $title,
+		'thumbnailUrl' => $thumb,
+		'embedUrl'     => 'https://www.youtube.com/embed/' . $id,
+		'url'          => $watch,
+	);
+	$date = (string) ( $atts['upload_date'] ?? '' );
+	if ( preg_match( '/^\d{4}-\d{2}-\d{2}$/', $date ) ) {
+		$ld['uploadDate'] = $date;
+	}
+	return '<figure class="gbg-video" data-yt="' . esc_attr( $id ) . '">'
+		. '<a class="gbg-video-thumb" href="' . esc_url( $watch ) . '" target="_blank" rel="noopener" data-title="' . esc_attr( $title ) . '">'
+		. '<img src="' . esc_url( $thumb ) . '" alt="' . esc_attr( 'Video: ' . $title ) . '" loading="lazy" decoding="async" width="1280" height="720" />'
+		. '<span class="gbg-video-btn" aria-hidden="true"></span></a>'
+		. '<figcaption><a href="' . esc_url( $watch ) . '" target="_blank" rel="noopener">' . esc_html( 'Watch our video: ' . $title ) . ' (YouTube)</a></figcaption>'
+		. '</figure>'
+		. '<script type="application/ld+json">' . str_replace( '</', '<\/', (string) wp_json_encode( $ld ) ) . '</script>';
+}
+
+/** CSS + click-to-play script for the light player, printed once per page. */
+function gbg_core_video_assets(): string {
+	return '<style id="gbg-video-css">.gbg-video{margin:1.2em 0}.gbg-video-thumb,.gbg-video iframe{position:relative;display:block;width:100%;aspect-ratio:16/9;border:0;border-radius:8px;overflow:hidden;background:#000}'
+		. '.gbg-video-thumb img{width:100%;height:100%;object-fit:cover;display:block;margin:0}'
+		. '.gbg-video-btn{position:absolute;left:50%;top:50%;width:68px;height:48px;margin:-24px 0 0 -34px;border-radius:12px;background:rgba(20,20,20,.8);transition:background .2s}'
+		. '.gbg-video-btn::after{content:"";position:absolute;left:27px;top:14px;border-style:solid;border-width:10px 0 10px 17px;border-color:transparent transparent transparent #fff}'
+		. '.gbg-video-thumb:hover .gbg-video-btn,.gbg-video-thumb:focus .gbg-video-btn{background:#f00}.gbg-video figcaption{font-size:.9em;margin-top:.4em}</style>'
+		. '<script id="gbg-video-js">document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest(".gbg-video-thumb");if(!a||e.ctrlKey||e.metaKey||e.shiftKey||e.button)return;var f=a.closest(".gbg-video");if(!f)return;e.preventDefault();'
+		. 'var i=document.createElement("iframe");i.src="https://www.youtube-nocookie.com/embed/"+f.getAttribute("data-yt")+"?autoplay=1&rel=0";i.title=a.getAttribute("data-title")||"Video";'
+		. 'i.allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture; fullscreen";i.allowFullscreen=true;i.referrerPolicy="strict-origin-when-cross-origin";a.replaceWith(i);i.focus();});</script>';
+}
+
 add_action(
 	'init',
 	static function () {
 		if ( ! shortcode_exists( 'arve' ) ) {
-			add_shortcode( 'arve', static fn( $atts ) => gbg_core_arve_link( (array) $atts ) );
+			add_shortcode(
+				'arve',
+				static function ( $atts ) {
+					static $assets = false;
+					$html = gbg_core_arve_player( (array) $atts, (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
+					if ( ! $assets && str_contains( $html, 'gbg-video"' ) ) {
+						$assets = true;
+						$html   = gbg_core_video_assets() . $html;
+					}
+					return $html;
+				}
+			);
 		}
 	},
 	99

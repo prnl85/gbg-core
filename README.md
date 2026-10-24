@@ -82,6 +82,9 @@ Three switches, off by default (24-10: 367 of 368 /go/ hits a day came from bots
 ## Author box (0.3.59–0.3.60)
 `author_box_enabled` + `author_box` {name, about_url, photo_id, text, links[{label,url}]} (https only). Under the content of single posts: photo, "Written by <name>" linking to About, text, links with real anchor texts, last updated date. Mobile: photo beside the name, text full width.
 
+## [arve] fallback (0.3.61) and light player (0.3.62)
+Without the ARVE plugin, `[arve url="https://youtu.be/…" title="…"]` renders as a plain link "Watch our video: <title> (YouTube)" (YouTube/Vimeo only, https). Since 0.3.62 a YouTube URL renders as a light player: own thumbnail (or i.ytimg.com) with play button, caption link "Watch our video: <title> (YouTube)", youtube-nocookie iframe only after a click, VideoObject JSON-LD. Vimeo/others stay a link. Registered on `init` only when no `arve` shortcode exists.
+
 ## Build, test, install
 
 - Test: `php wordpress/tests/gbg-core-test.php <dir with WordPress wp-includes/html-api files + class-wp-token-map.php>`
