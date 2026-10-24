@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.58
+ * Version: 0.3.59
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.58';
+const GBG_CORE_VERSION = '0.3.59';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -121,6 +121,10 @@ function gbg_core_defaults(): array {
 		'go_rel'             => false,
 		'go_robots'          => false,
 		'go_gate'            => false,
+		// 0.3.59 (Paul 24-10): author box under every post: photo, 2-3 sentences, links, last updated date. Facts only from
+		// the About page; the text is a setting so Paul can change it without a release.
+		'author_box_enabled' => false,
+		'author_box'         => array(),
 	);
 }
 
@@ -135,7 +139,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'author_box_enabled' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -173,6 +177,9 @@ function gbg_core_sanitize( array $input ): array {
 	}
 	if ( array_key_exists( 'disclosure_url', $input ) ) {
 		$clean['disclosure_url'] = esc_url_raw( (string) $input['disclosure_url'] );
+	}
+	if ( array_key_exists( 'author_box', $input ) ) {
+		$clean['author_box'] = gbg_core_author_box_sanitize( (array) $input['author_box'] );
 	}
 	if ( array_key_exists( 'ab_tests', $input ) ) {
 		$clean['ab_tests'] = gbg_core_ab_sanitize( (array) $input['ab_tests'] );
@@ -484,6 +491,74 @@ add_filter(
 	},
 	10,
 	5
+);
+
+/* -------------------------------------------------------------------------
+ * Author box (0.3.59, Paul 24-10: "nog nergens een author box"). Under the content of every post: photo, name linking to
+ * the About page, 2-3 sentences, profile links with real anchor texts and the last updated date. Off until switched on.
+ * ---------------------------------------------------------------------- */
+
+/** Keep only well-formed author box fields. Pure (apart from esc_url_raw/sanitize_text_field). */
+function gbg_core_author_box_sanitize( array $in ): array {
+	$links = array();
+	foreach ( array_slice( (array) ( $in['links'] ?? array() ), 0, 6 ) as $l ) {
+		$l   = (array) $l;
+		$url = esc_url_raw( (string) ( $l['url'] ?? '' ) );
+		if ( str_starts_with( $url, 'https://' ) && '' !== trim( (string) ( $l['label'] ?? '' ) ) ) {
+			$links[] = array( 'label' => sanitize_text_field( (string) $l['label'] ), 'url' => $url );
+		}
+	}
+	return array(
+		'name'      => sanitize_text_field( (string) ( $in['name'] ?? '' ) ),
+		'about_url' => esc_url_raw( (string) ( $in['about_url'] ?? '' ) ),
+		'photo_id'  => absint( $in['photo_id'] ?? 0 ),
+		'text'      => sanitize_text_field( (string) ( $in['text'] ?? '' ) ),
+		'links'     => $links,
+	);
+}
+
+/** Author box HTML; $img is the photo tag (or ''), $updated the date text. Pure apart from escaping. */
+function gbg_core_author_box_html( array $a, string $img, string $updated ): string {
+	if ( '' === $a['name'] || '' === $a['text'] ) {
+		return '';
+	}
+	$name  = $a['about_url'] ? '<a href="' . esc_url( $a['about_url'] ) . '">' . esc_html( $a['name'] ) . '</a>' : esc_html( $a['name'] );
+	$links = array_map( static fn( $l ) => '<a href="' . esc_url( $l['url'] ) . '" rel="me noopener" target="_blank">' . esc_html( $l['label'] ) . '</a>', $a['links'] );
+	if ( $a['about_url'] ) {
+		array_unshift( $links, '<a href="' . esc_url( $a['about_url'] ) . '">More about me</a>' );
+	}
+	return '<aside class="gbg-author" aria-label="About the author">' . $img . '<div class="gbg-author-body">'
+		. '<p class="gbg-author-name">Written by ' . $name . ( '' !== $updated ? ' <span class="gbg-author-date">· updated ' . esc_html( $updated ) . '</span>' : '' ) . '</p>'
+		. '<p class="gbg-author-text">' . esc_html( $a['text'] ) . '</p>'
+		. ( $links ? '<p class="gbg-author-links">' . implode( ' · ', $links ) . '</p>' : '' ) . '</div></aside>';
+}
+
+add_filter(
+	'the_content',
+	static function ( $content ) {
+		$s = gbg_core_settings();
+		if ( ! $s['author_box_enabled'] || ! is_string( $content ) || is_admin() || is_feed() || ! is_singular( 'post' ) || ! in_the_loop() || ! is_main_query()
+			|| ( defined( 'REST_REQUEST' ) && REST_REQUEST ) || str_contains( $content, 'class="gbg-author"' ) ) {
+			return $content;
+		}
+		$a   = gbg_core_author_box_sanitize( (array) $s['author_box'] );
+		$img = $a['photo_id'] ? (string) wp_get_attachment_image( $a['photo_id'], array( 176, 176 ), false, array( 'class' => 'gbg-author-photo', 'loading' => 'lazy', 'alt' => $a['name'] ) ) : '';
+		return $content . gbg_core_author_box_html( $a, $img, (string) get_the_modified_date( 'j F Y' ) );
+	},
+	50
+);
+
+add_action(
+	'wp_head',
+	static function () {
+		if ( ! gbg_core_settings()['author_box_enabled'] || ! is_singular( 'post' ) ) {
+			return;
+		}
+		echo '<style id="gbg-author-css">.gbg-author{display:flex;gap:1em;align-items:flex-start;margin:2.2em 0 1.4em;padding:1em 1.1em;border-radius:10px;background:rgba(140,198,63,.10)}'
+			. '.gbg-author-photo{flex:none;width:88px;height:88px;border-radius:50%;object-fit:cover}.gbg-author-body{min-width:0}.gbg-author-body p{margin:0 0 .35em}'
+			. '.gbg-author-name{font-weight:700}.gbg-author-date{font-weight:400;opacity:.75;font-size:.9em}.gbg-author-links{font-size:.92em}'
+			. '@media(max-width:600px){.gbg-author{gap:.8em;padding:.9em}.gbg-author-photo{width:64px;height:64px}}</style>'; // phpcs:ignore WordPress.Security.EscapeOutput
+	}
 );
 
 /* -------------------------------------------------------------------------
