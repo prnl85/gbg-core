@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.63
+ * Version: 0.3.64
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.63';
+const GBG_CORE_VERSION = '0.3.64';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -127,6 +127,9 @@ function gbg_core_defaults(): array {
 		'author_box'         => array(),
 		// 0.3.63 (Paul 24-10): also on first-person pages such as country hubs (page IDs); never on programmatic or legal pages.
 		'author_box_pages'   => array(),
+		// 0.3.64 (Paul 24-10): the default Impreza page template shifts the page content 40px left (us_custom_b4f4ca0f);
+		// right on desktop, but on phones the text sits 8px from the left edge and 48px from the right. Fix for <= 600px.
+		'page_padding_fix'   => false,
 	);
 }
 
@@ -141,7 +144,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'author_box_enabled' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'author_box_enabled', 'page_padding_fix' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -571,6 +574,21 @@ add_action(
 			. '.gbg-author-name{font-weight:700}.gbg-author-date{font-weight:400;opacity:.75;font-size:.9em}.gbg-author-links{font-size:.92em}'
 			. '@media(max-width:600px){.gbg-author{display:grid;grid-template-columns:56px 1fr;column-gap:.8em;row-gap:.5em;align-items:center;padding:.9em}.gbg-author-photo{width:56px;height:56px}.gbg-author-body{display:contents}.gbg-author-name{margin:0}.gbg-author-text,.gbg-author-links{grid-column:1/-1}}</style>'; // phpcs:ignore WordPress.Security.EscapeOutput
 	}
+);
+
+/** Mobile CSS that evens out the page template's negative content margin (page_padding_fix). Pure. */
+function gbg_core_page_padding_css(): string {
+	return '<style id="gbg-page-padding">@media(max-width:600px){.w-post-elm.post_content.us_custom_b4f4ca0f{margin-left:-24px!important;margin-right:-24px!important}}</style>';
+}
+
+add_action(
+	'wp_head',
+	static function () {
+		if ( gbg_core_settings()['page_padding_fix'] && is_page() ) {
+			echo gbg_core_page_padding_css(); // phpcs:ignore WordPress.Security.EscapeOutput
+		}
+	},
+	99
 );
 
 /* -------------------------------------------------------------------------
