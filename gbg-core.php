@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.59
+ * Version: 0.3.60
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.59';
+const GBG_CORE_VERSION = '0.3.60';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -557,7 +557,7 @@ add_action(
 		echo '<style id="gbg-author-css">.gbg-author{display:flex;gap:1em;align-items:flex-start;margin:2.2em 0 1.4em;padding:1em 1.1em;border-radius:10px;background:rgba(140,198,63,.10)}'
 			. '.gbg-author-photo{flex:none;width:88px;height:88px;border-radius:50%;object-fit:cover}.gbg-author-body{min-width:0}.gbg-author-body p{margin:0 0 .35em}'
 			. '.gbg-author-name{font-weight:700}.gbg-author-date{font-weight:400;opacity:.75;font-size:.9em}.gbg-author-links{font-size:.92em}'
-			. '@media(max-width:600px){.gbg-author{gap:.8em;padding:.9em}.gbg-author-photo{width:64px;height:64px}}</style>'; // phpcs:ignore WordPress.Security.EscapeOutput
+			. '@media(max-width:600px){.gbg-author{display:grid;grid-template-columns:56px 1fr;column-gap:.8em;row-gap:.5em;align-items:center;padding:.9em}.gbg-author-photo{width:56px;height:56px}.gbg-author-body{display:contents}.gbg-author-name{margin:0}.gbg-author-text,.gbg-author-links{grid-column:1/-1}}</style>'; // phpcs:ignore WordPress.Security.EscapeOutput
 	}
 );
 
