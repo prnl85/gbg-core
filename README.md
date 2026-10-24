@@ -65,6 +65,11 @@ Kill switch `leads_enabled` (default off). `lead_magnets`: id, title, pitch, but
 ## Impreza layout meta (0.3.51)
 - `us_header_id`, `us_titlebar_id`, `us_content_id`, `us_footer_id` on pages are readable and writable via the REST API (editors of that page only; values `__defaults__`, empty or an ID), so a new page can copy the layout of its siblings.
 
+## Click counting fixes (0.3.52)
+- `/go/` hits without the `gbg_pl` cookie from the page script are counted with placement `nojs` (crawlers, prefetchers, links shared elsewhere), so readers and robots are apart in `/gbg/v1/go-stats`.
+- Middle-click (open in new tab) counts in the click tracking and in A/B tests (`auxclick`).
+- GA4 Measurement Protocol: only `gobackpackgo.com` records (`/mp/collect`); any other host (staging) sends to `/debug/mp/collect`, which validates and records nothing. Health shows `ga4_mp.mode`.
+
 ## Build, test, install
 
 - Test: `php wordpress/tests/gbg-core-test.php <dir with WordPress wp-includes/html-api files + class-wp-token-map.php>`

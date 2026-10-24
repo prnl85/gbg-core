@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.52
+ * Version: 0.3.53
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,8 +15,18 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.52';
+const GBG_CORE_VERSION = '0.3.53';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
+
+// GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
+// <html dir="rtl">. Breeze's page cache ignores that header and stored the RTL render under the English URL, so normal
+// visitors got right-to-left English pages (incident 24-10). Never let those fetches into the page cache.
+if ( ! empty( $_SERVER['HTTP_X_GT_LANG'] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+	if ( ! defined( 'DONOTCACHEPAGE' ) ) {
+		define( 'DONOTCACHEPAGE', true );
+	}
+	add_action( 'send_headers', 'nocache_headers' );
+}
 
 /**
  * Settings with safe defaults: nothing changes on the site until a feature is enabled.
@@ -105,6 +115,12 @@ function gbg_core_defaults(): array {
 		'esim_faq_fix'       => false,
 		// 0.3.49: short 'nearby' section (city <-> airport <-> hub) at the end of cluster pages, data via /gbg/v1/nearby.
 		'nearby_enabled'     => false,
+		// 0.3.53 (24-10: bots opened /go/ links directly, 367 of 368 hits a day, all counted as clicks by the partner):
+		// go_rel adds rel="nofollow sponsored" to /go/ links, go_robots puts Disallow: /go/ in robots.txt, go_gate sends a
+		// /go/ hit without the page cookie and without our own Referer to a small page that forwards readers by script.
+		'go_rel'             => false,
+		'go_robots'          => false,
+		'go_gate'            => false,
 	);
 }
 
@@ -119,7 +135,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -1774,6 +1790,30 @@ function gbg_core_go_page_links( string $html, int $post_id, array $slugs ): str
 	return (string) preg_replace( $rx, 'href="$1?s=p' . $post_id . '"', $html );
 }
 
+/**
+ * rel="nofollow sponsored" on every link to /go/ (own host or relative, with or without a language folder): Google asks
+ * for 'sponsored' on paid links, and crawlers that respect nofollow stop opening them (0.3.53). Pure.
+ */
+function gbg_core_go_rel( string $html, string $host ): string {
+	$href = '#\bhref=(["\'])(?:https?://' . preg_quote( $host, '#' ) . ')?/(?:[a-z]{2}(?:-[a-z]{2,4})?/)?go/#i';
+	return (string) preg_replace_callback(
+		'#<a\b[^>]*>#i',
+		static function ( $m ) use ( $href ) {
+			$tag = $m[0];
+			if ( ! preg_match( $href, $tag ) ) {
+				return $tag;
+			}
+			if ( preg_match( '#\brel=(["\'])(.*?)\1#i', $tag, $r ) ) {
+				$have = preg_split( '/\s+/', strtolower( trim( $r[2] ) ) ) ?: array();
+				$rel  = trim( implode( ' ', array_unique( array_merge( array_filter( $have ), array( 'nofollow', 'sponsored' ) ) ) ) );
+				return str_replace( $r[0], 'rel="' . $rel . '"', $tag );
+			}
+			return substr( $tag, 0, -1 ) . ' rel="nofollow sponsored">';
+		},
+		$html
+	);
+}
+
 // On a mapped page: /go/<slug>/ links (own host or relative) carry the page's country and ID.
 function gbg_core_go_country_links( string $html, string $country, int $post_id, array $slugs ): string {
 	if ( ! $slugs ) {
@@ -1801,7 +1841,8 @@ add_action(
 				}
 				// Links outside the content (sticky button, footer) get the page's country too, then every /go/ link the page ID.
 				$html = $country ? gbg_core_go_country_links( $html, $country, $post_id, $cslugs ) : $html;
-				return gbg_core_go_page_links( $html, $post_id, $slugs );
+				$html = gbg_core_go_page_links( $html, $post_id, $slugs );
+				return gbg_core_settings()['go_rel'] ? gbg_core_go_rel( $html, (string) wp_parse_url( home_url(), PHP_URL_HOST ) ) : $html;
 			}
 		);
 	},
@@ -2118,6 +2159,10 @@ add_action(
 		header( 'X-Robots-Tag: noindex, nofollow' );
 		header( 'Cache-Control: no-store, private' );
 		header( 'X-GBG-Go: 1' );
+		$own = (string) wp_parse_url( home_url(), PHP_URL_HOST );
+		if ( gbg_core_settings()['go_gate'] && gbg_core_go_gated( $_COOKIE, $_GET, $_POST, (string) ( $_SERVER['HTTP_REFERER'] ?? '' ), $own ) ) { // phpcs:ignore WordPress.Security
+			gbg_core_go_gate_page();
+		}
 		gbg_core_go_track( $target );
 		wp_redirect( $target, 302, 'GoBackpackGo' ); // phpcs:ignore WordPress.Security.SafeRedirect -- targets are allowlisted
 		exit;
@@ -2294,7 +2339,7 @@ function gbg_core_known_link( string $slug ): bool {
 
 /** Placement of a click: one of the names the page script sets, else 'unknown'. Pure. */
 function gbg_core_placement( string $p ): string {
-	return in_array( $p, array( 'content', 'button', 'promo', 'ab', 'sticky', 'header', 'footer', 'nojs' ), true ) ? $p : 'unknown';
+	return in_array( $p, array( 'content', 'button', 'promo', 'ab', 'sticky', 'header', 'footer', 'nojs', 'direct' ), true ) ? $p : 'unknown';
 }
 
 /** Keeps a page URL only when it is on our own host (GA4 page_location from the browser or a Referer); else ''. Pure. */
@@ -2330,6 +2375,31 @@ function gbg_core_mp_send( string $name, array $params ): bool {
 	return true;
 }
 
+/**
+ * True when a /go/ hit must pass the forwarding page first: no click cookie from our page script, not the page's own
+ * second try (?gbgh=1, also through the translation proxy, which may not pass cookies) or its button (POST gbg_go), and
+ * not coming from one of our own pages. Pure.
+ */
+function gbg_core_go_gated( array $cookie, array $get, array $post, string $referer, string $own_host ): bool {
+	if ( isset( $cookie['gbg_pl'] ) || '1' === (string) ( $get['gbgh'] ?? '' ) || '1' === (string) ( $post['gbg_go'] ?? '' ) ) {
+		return false;
+	}
+	return '' === $own_host || strtolower( (string) wp_parse_url( $referer, PHP_URL_HOST ) ) !== strtolower( $own_host );
+}
+
+/** The forwarding page: readers' browsers go on at once by script; crawlers that do not run scripts stop here. */
+function gbg_core_go_gate_page(): void {
+	$slug = preg_match( '#/go/([a-z0-9-]+)#', strtolower( (string) wp_parse_url( $_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH ) ), $m ) ? $m[1] : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+	gbg_core_go_count( $slug, 'nojs', (string) ( $_GET['s'] ?? '' ) ); // phpcs:ignore WordPress.Security
+	status_header( 200 );
+	header( 'Content-Type: text/html; charset=utf-8' );
+	echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex, nofollow"><meta name="viewport" content="width=device-width,initial-scale=1">'
+		. '<title>One moment</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 16px;color:#222}button{font:inherit;padding:.6em 1.2em;border:0;border-radius:6px;background:#8fc646;color:#fff;cursor:pointer}</style>'
+		. '<script>(function(){var u=new URL(location.href);u.searchParams.set("gbgh","1");location.replace(u.toString())})();</script></head><body>'
+		. '<p>Taking you to our partner&hellip;</p><form method="post"><input type="hidden" name="gbg_go" value="1"><button type="submit">Continue</button></form></body></html>';
+	exit;
+}
+
 // /go/<slug>/: the click the page described in the gbg_pl cookie (placement|ab_test|text|page), or the referrer.
 function gbg_core_go_track( string $target ): void {
 	$slug = '';
@@ -2341,7 +2411,8 @@ function gbg_core_go_track( string $target ): void {
 	// No cookie from the page script = nobody clicked on a page (0.3.52): crawlers that follow /go/ links, prefetchers,
 	// links shared elsewhere. Counted as 'nojs', apart from readers, instead of 'unknown'.
 	if ( ! isset( $_COOKIE['gbg_pl'] ) ) {
-		$pl[0] = 'nojs';
+		// Through the forwarding page (0.3.53) = a reader who came from elsewhere (shared link, other site): 'direct'.
+		$pl[0] = '1' === (string) ( $_GET['gbgh'] ?? '' ) || '1' === (string) ( $_POST['gbg_go'] ?? '' ) ? 'direct' : 'nojs'; // phpcs:ignore WordPress.Security
 	}
 	gbg_core_go_count( $slug, gbg_core_placement( (string) ( $pl[0] ?? '' ) ), (string) ( $_GET['s'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification,WordPress.Security.ValidatedSanitizedInput
 	gbg_core_mp_send(
@@ -2549,8 +2620,12 @@ add_filter(
 const GBG_CORE_BAIDU_SKIP = array( 'af', 'sq', 'ar', 'hy', 'az', 'eu', 'be', 'bn', 'bg', 'co', 'hr', 'cs', 'da', 'nl', 'eo', 'et', 'tl', 'fi', 'fr', 'gl', 'ka', 'de', 'el', 'gu', 'haw', 'iw', 'hi', 'hu', 'id', 'it', 'ja', 'jw', 'kn', 'kk', 'ko', 'ku', 'ky', 'lo', 'la', 'lv', 'lt', 'lb', 'mk', 'mg', 'ms', 'ml', 'mr', 'my', 'ne', 'no', 'fa', 'pl', 'pt', 'pa', 'ro', 'ru', 'sr', 'sk', 'sl', 'es', 'sv', 'ta', 'te', 'th', 'tr', 'uk', 'vi' );
 
 /** robots.txt group for Baiduspider, between markers so it can be taken out again. Pure. */
-function gbg_core_baidu_robots(): string {
+function gbg_core_baidu_robots( bool $go = false ): string {
 	$lines = array( '# GBG CORE BAIDU START (Baidu only on English and Chinese pages)', 'User-agent: Baiduspider', 'Disallow: /cdn-cgi/rum' );
+	if ( $go ) { // Baidu follows only its own group, so the /go/ rule is repeated here
+		$lines[] = 'Disallow: /go/';
+		$lines[] = 'Disallow: /*/go/';
+	}
 	foreach ( GBG_CORE_BAIDU_SKIP as $lang ) {
 		$lines[] = 'Disallow: /' . $lang . '/';
 	}
@@ -2559,9 +2634,19 @@ function gbg_core_baidu_robots(): string {
 }
 
 /** robots.txt text with the Baidu group added ($on) or removed; the rest stays as it was. Pure. */
-function gbg_core_robots_baidu( string $text, bool $on ): string {
+function gbg_core_robots_baidu( string $text, bool $on, bool $go = false ): string {
 	$text = rtrim( (string) preg_replace( '/\n*# GBG CORE BAIDU START.*?# GBG CORE BAIDU END\n?/s', "\n", $text ) ) . "\n";
-	return $on ? $text . "\n" . gbg_core_baidu_robots() : $text;
+	return $on ? $text . "\n" . gbg_core_baidu_robots( $go ) : $text;
+}
+
+/** robots.txt with the /go/ group for every crawler added ($go) or removed, and the Baidu group as set. Pure. */
+function gbg_core_robots_apply( string $text, bool $baidu, bool $go ): string {
+	$text = rtrim( (string) preg_replace( '/\n*# GBG CORE GO START.*?# GBG CORE GO END\n?/s', "\n", $text ) ) . "\n";
+	$text = gbg_core_robots_baidu( $text, false );
+	if ( $go ) {
+		$text .= "\n# GBG CORE GO START (affiliate redirects are not pages)\nUser-agent: *\nDisallow: /go/\nDisallow: /*/go/\n# GBG CORE GO END\n";
+	}
+	return $baidu ? gbg_core_robots_baidu( $text, true, $go ) : $text;
 }
 
 // WordPress builds robots.txt only when there is no file; on these sites a physical robots.txt exists (Yoast file
@@ -2572,7 +2657,8 @@ function gbg_core_sync_robots_file(): string {
 		return is_file( $file ) ? 'not writable' : 'virtual';
 	}
 	$old = (string) file_get_contents( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions
-	$new = gbg_core_robots_baidu( $old, (bool) gbg_core_settings()['baidu_limit'] );
+	$s   = gbg_core_settings();
+	$new = gbg_core_robots_apply( $old, (bool) $s['baidu_limit'], (bool) $s['go_robots'] );
 	if ( $new === $old ) {
 		return 'unchanged';
 	}
@@ -2582,7 +2668,8 @@ function gbg_core_sync_robots_file(): string {
 add_filter(
 	'robots_txt',
 	static function ( $output ) {
-		return gbg_core_settings()['baidu_limit'] ? gbg_core_robots_baidu( (string) $output, true ) : $output;
+		$s = gbg_core_settings();
+		return $s['baidu_limit'] || $s['go_robots'] ? gbg_core_robots_apply( (string) $output, (bool) $s['baidu_limit'], (bool) $s['go_robots'] ) : $output;
 	},
 	PHP_INT_MAX // Yoast rebuilds the whole text at 99999; add after it
 );
