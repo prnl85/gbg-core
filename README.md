@@ -79,6 +79,9 @@ Three switches, off by default (24-10: 367 of 368 /go/ hits a day came from bots
 - `go_robots`: `Disallow: /go/` and `/*/go/` in robots.txt for every crawler, repeated inside the Baidu group; the physical robots.txt is rewritten on save.
 - `go_gate`: a /go/ hit without the page's click cookie, without `?gbgh=1`/the Continue button and not from one of our pages gets a small noindex page that forwards by script (`?gbgh=1`, also through the translation proxy). Counted as `nojs` on the first hit, `direct` when it goes on; crawlers that do not run scripts never reach the partner. 0.3.54: a hit from one of our pages without the cookie (in-app browsers, blockers) counts as `noscript`, a reader, not with the robots.
 
+## Author box (0.3.59–0.3.60)
+`author_box_enabled` + `author_box` {name, about_url, photo_id, text, links[{label,url}]} (https only). Under the content of single posts: photo, "Written by <name>" linking to About, text, links with real anchor texts, last updated date. Mobile: photo beside the name, text full width.
+
 ## Build, test, install
 
 - Test: `php wordpress/tests/gbg-core-test.php <dir with WordPress wp-includes/html-api files + class-wp-token-map.php>`
