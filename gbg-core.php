@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.53
+ * Version: 0.3.54
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.53';
+const GBG_CORE_VERSION = '0.3.54';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -2339,7 +2339,7 @@ function gbg_core_known_link( string $slug ): bool {
 
 /** Placement of a click: one of the names the page script sets, else 'unknown'. Pure. */
 function gbg_core_placement( string $p ): string {
-	return in_array( $p, array( 'content', 'button', 'promo', 'ab', 'sticky', 'header', 'footer', 'nojs', 'direct' ), true ) ? $p : 'unknown';
+	return in_array( $p, array( 'content', 'button', 'promo', 'ab', 'sticky', 'header', 'footer', 'nojs', 'direct', 'noscript' ), true ) ? $p : 'unknown';
 }
 
 /** Keeps a page URL only when it is on our own host (GA4 page_location from the browser or a Referer); else ''. Pure. */
@@ -2387,6 +2387,14 @@ function gbg_core_go_gated( array $cookie, array $get, array $post, string $refe
 	return '' === $own_host || strtolower( (string) wp_parse_url( $referer, PHP_URL_HOST ) ) !== strtolower( $own_host );
 }
 
+/** Placement of a /go/ hit without the page's click cookie: direct (via the forwarding page), noscript (from our page), nojs. Pure. */
+function gbg_core_go_nocookie_placement( array $get, array $post, string $referer, string $own_host ): string {
+	if ( '1' === (string) ( $get['gbgh'] ?? '' ) || '1' === (string) ( $post['gbg_go'] ?? '' ) ) {
+		return 'direct';
+	}
+	return '' !== $own_host && strtolower( (string) wp_parse_url( $referer, PHP_URL_HOST ) ) === strtolower( $own_host ) ? 'noscript' : 'nojs';
+}
+
 /** The forwarding page: readers' browsers go on at once by script; crawlers that do not run scripts stop here. */
 function gbg_core_go_gate_page(): void {
 	$slug = preg_match( '#/go/([a-z0-9-]+)#', strtolower( (string) wp_parse_url( $_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH ) ), $m ) ? $m[1] : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
@@ -2412,7 +2420,9 @@ function gbg_core_go_track( string $target ): void {
 	// links shared elsewhere. Counted as 'nojs', apart from readers, instead of 'unknown'.
 	if ( ! isset( $_COOKIE['gbg_pl'] ) ) {
 		// Through the forwarding page (0.3.53) = a reader who came from elsewhere (shared link, other site): 'direct'.
-		$pl[0] = '1' === (string) ( $_GET['gbgh'] ?? '' ) || '1' === (string) ( $_POST['gbg_go'] ?? '' ) ? 'direct' : 'nojs'; // phpcs:ignore WordPress.Security
+		// From one of our pages without the cookie (0.3.54) = a reader whose browser did not run or keep the page script
+		// (in-app browsers, blockers): 'noscript', never counted with the robots ('nojs').
+		$pl[0] = gbg_core_go_nocookie_placement( $_GET, $_POST, (string) ( $_SERVER['HTTP_REFERER'] ?? '' ), (string) wp_parse_url( home_url(), PHP_URL_HOST ) ); // phpcs:ignore WordPress.Security
 	}
 	gbg_core_go_count( $slug, gbg_core_placement( (string) ( $pl[0] ?? '' ) ), (string) ( $_GET['s'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification,WordPress.Security.ValidatedSanitizedInput
 	gbg_core_mp_send(
