@@ -63,6 +63,9 @@ Kill switch `leads_enabled` (default off). `lead_magnets`: id, title, pitch, but
 - `GET/POST /gbg/v1/nearby` stores per page slug a heading and up to 8 links (own relative paths only), built by `scripts/nearby_links.py` from `config/car-rental-regions.json`. Setting `nearby_enabled` appends them as a short section at the end of the main content; off removes them everywhere. 0.3.50: own 16px gutter (full-width rows on cluster pages).
 
 ## Impreza layout meta (0.3.51, posts since 0.3.55)
+
+## Save bar (0.3.56–0.3.57)
+On mobile the buttons share one row (flex, max 84 px); the bar is never placed inside a quote, list, table cell, aside or figure.
 - `us_header_id`, `us_titlebar_id`, `us_content_id`, `us_footer_id` on pages are readable and writable via the REST API (editors of that page only; values `__defaults__`, empty or an ID), so a new page can copy the layout of its siblings.
 
 ## Click counting fixes (0.3.52)

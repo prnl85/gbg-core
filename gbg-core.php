@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.57
+ * Version: 0.3.58
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.57';
+const GBG_CORE_VERSION = '0.3.58';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -456,6 +456,34 @@ add_action(
 		}
 		}
 	}
+);
+
+/* -------------------------------------------------------------------------
+ * Route files (0.3.58, Paul 24-10: downloadable routes, e.g. the Pakse Loop): GPX and KML may be uploaded to the media
+ * library by users who can upload. WordPress sees both as XML, so the real-type check is told they belong together.
+ * ---------------------------------------------------------------------- */
+
+const GBG_CORE_ROUTE_MIMES = array( 'gpx' => 'application/gpx+xml', 'kml' => 'application/vnd.google-earth.kml+xml' );
+
+add_filter( 'upload_mimes', static fn( $m ) => array_merge( (array) $m, GBG_CORE_ROUTE_MIMES ) );
+
+/** Filetype for an upload named $filename whose content PHP reports as $real; null when it is not a route file. Pure. */
+function gbg_core_route_filetype( string $filename, string $real ): ?array {
+	$ext = strtolower( (string) pathinfo( $filename, PATHINFO_EXTENSION ) );
+	if ( ! isset( GBG_CORE_ROUTE_MIMES[ $ext ] ) || ! in_array( $real, array( 'text/xml', 'application/xml', 'text/plain', '' ), true ) ) {
+		return null;
+	}
+	return array( 'ext' => $ext, 'type' => GBG_CORE_ROUTE_MIMES[ $ext ], 'proper_filename' => false );
+}
+
+add_filter(
+	'wp_check_filetype_and_ext',
+	static function ( $data, $file, $filename, $mimes, $real_mime = '' ) {
+		$route = gbg_core_route_filetype( (string) $filename, (string) $real_mime );
+		return $route && current_user_can( 'upload_files' ) ? $route : $data;
+	},
+	10,
+	5
 );
 
 /* -------------------------------------------------------------------------
