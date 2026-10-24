@@ -1609,6 +1609,17 @@ function gbg_core_hero_end( string $html ): int {
 	return -1;
 }
 
+/** True when $pos lies inside a quote, list item, table cell, aside or figure (0.3.56: the bar landed in a quote box). Pure. */
+function gbg_core_inside_box( string $html, int $pos ): bool {
+	$before = substr( $html, 0, $pos );
+	foreach ( array( 'blockquote', 'li', 'td', 'aside', 'figure' ) as $tag ) {
+		if ( preg_match_all( '~<' . $tag . '[\s>]~i', $before ) > preg_match_all( '~</' . $tag . '>~i', $before ) ) {
+			return true;
+		}
+	}
+	return false;
+}
+
 /** Insert the bar after the first real paragraph (the direct answer stays first); fall back to the bottom. */
 function gbg_core_share_insert( string $content, string $bar, string $position ): string {
 	if ( 'bottom' === $position ) {
@@ -1619,7 +1630,7 @@ function gbg_core_share_insert( string $content, string $bar, string $position )
 	$top = $content . $bar;
 	if ( preg_match_all( '~<p[\s>].*?</p>~is', $content, $all, PREG_OFFSET_CAPTURE ) ) {
 		foreach ( $all[0] as $p ) {
-			if ( str_word_count( wp_strip_all_tags( $p[0] ) ) >= 20 && ! str_contains( $p[0], 'gbg-disclosure' ) ) {
+			if ( str_word_count( wp_strip_all_tags( $p[0] ) ) >= 20 && ! str_contains( $p[0], 'gbg-disclosure' ) && ! gbg_core_inside_box( $content, (int) $p[1] ) ) {
 				$end = $p[1] + strlen( $p[0] );
 				$top = substr( $content, 0, $end ) . $bar . substr( $content, $end );
 				break;
