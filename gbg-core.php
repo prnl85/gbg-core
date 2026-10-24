@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.65
+ * Version: 0.3.66
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.65';
+const GBG_CORE_VERSION = '0.3.66';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -49,7 +49,7 @@ function gbg_core_defaults(): array {
 		'subid_enabled'      => false,
 		// Append "-<lang>" from GTranslate's X-GT-Lang header. Only switch on once the cache varies on that header.
 		'subid_lang'         => false,
-		// Hosts whose links get a sub_id query parameter. Short links (tp.st, tpk.lv) are redirects and cannot carry one.
+		// Hosts whose links get a sub_id query parameter. 0.3.65: tp.st short links accept ?sub_id= too (Travelpayouts docs).
 		'subid_hosts'        => array( 'tp.media', 'tp.st' ),
 		// Also tag links outside the main content (Impreza footer blocks, sticky mobile eSIM button) on single views.
 		'subid_whole_page'   => true,
@@ -440,6 +440,25 @@ add_action(
 			static fn( $html ) => ( is_string( $html ) && '' !== $html ) ? gbg_core_process_links( $html, $s, $subid )[0] : $html
 		);
 	}
+);
+
+/*
+ * 0.3.65: Impreza buttons in page blocks (the buy-SIM footer and sticky button) are rendered outside the_content, and
+ * on this server the whole-page buffer above does not reach them (another plugin takes the page buffer first).
+ * Shortcode output with a Travelpayouts link gets the same link walk, so those links get the sub_id and a clean query.
+ */
+add_filter(
+	'do_shortcode_tag',
+	static function ( $output, $tag ) {
+		$s = gbg_core_settings();
+		if ( ! is_string( $output ) || ! $s['subid_enabled'] || is_admin() || is_feed() || ! is_singular()
+			|| ( ! str_contains( $output, 'tp.media' ) && ! str_contains( $output, 'tp.st' ) ) ) {
+			return $output;
+		}
+		return gbg_core_process_links( $output, $s, gbg_core_subid( (int) get_queried_object_id() ) )[0];
+	},
+	20,
+	2
 );
 
 /* -------------------------------------------------------------------------
