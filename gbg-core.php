@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.54
+ * Version: 0.3.55
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.54';
+const GBG_CORE_VERSION = '0.3.55';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -439,9 +439,11 @@ add_action(
 		}
 		// 0.3.51: Impreza layout per page (header, title bar, content template, footer), so a new page can get the same
 		// layout as its siblings via the REST API. Values: '__defaults__', '' (none) or a template post ID.
+		// 0.3.55: also posts (24-10: four Thailand posts kept a full-width layout without title and featured image).
+		foreach ( array( 'page', 'post' ) as $type ) {
 		foreach ( array( 'us_header_id', 'us_titlebar_id', 'us_content_id', 'us_footer_id' ) as $key ) {
 			register_post_meta(
-				'page',
+				$type,
 				$key,
 				array(
 					'type'              => 'string',
@@ -451,6 +453,7 @@ add_action(
 					'auth_callback'     => static fn( $allowed, $meta_key, $post_id ) => current_user_can( 'edit_post', $post_id ),
 				)
 			);
+		}
 		}
 	}
 );

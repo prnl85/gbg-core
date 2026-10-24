@@ -74,7 +74,7 @@ Kill switch `leads_enabled` (default off). `lead_magnets`: id, title, pitch, but
 Three switches, off by default (24-10: 367 of 368 /go/ hits a day came from bots with a browser user agent):
 - `go_rel`: `rel="nofollow sponsored"` on every /go/ link in the page (Google's rule for paid links).
 - `go_robots`: `Disallow: /go/` and `/*/go/` in robots.txt for every crawler, repeated inside the Baidu group; the physical robots.txt is rewritten on save.
-- `go_gate`: a /go/ hit without the page's click cookie, without `?gbgh=1`/the Continue button and not from one of our pages gets a small noindex page that forwards by script (`?gbgh=1`, also through the translation proxy). Counted as `nojs` on the first hit, `direct` when it goes on; crawlers that do not run scripts never reach the partner.
+- `go_gate`: a /go/ hit without the page's click cookie, without `?gbgh=1`/the Continue button and not from one of our pages gets a small noindex page that forwards by script (`?gbgh=1`, also through the translation proxy). Counted as `nojs` on the first hit, `direct` when it goes on; crawlers that do not run scripts never reach the partner. 0.3.54: a hit from one of our pages without the cookie (in-app browsers, blockers) counts as `noscript`, a reader, not with the robots.
 
 ## Build, test, install
 
