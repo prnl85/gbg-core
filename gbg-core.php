@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.64
+ * Version: 0.3.65
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.64';
+const GBG_CORE_VERSION = '0.3.65';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -50,7 +50,7 @@ function gbg_core_defaults(): array {
 		// Append "-<lang>" from GTranslate's X-GT-Lang header. Only switch on once the cache varies on that header.
 		'subid_lang'         => false,
 		// Hosts whose links get a sub_id query parameter. Short links (tp.st, tpk.lv) are redirects and cannot carry one.
-		'subid_hosts'        => array( 'tp.media' ),
+		'subid_hosts'        => array( 'tp.media', 'tp.st' ),
 		// Also tag links outside the main content (Impreza footer blocks, sticky mobile eSIM button) on single views.
 		'subid_whole_page'   => true,
 		// Only administrators may use the default MCP server (/wp-json/mcp/mcp-adapter-default-server); others get 401.
@@ -318,6 +318,11 @@ function gbg_core_subid( int $post_id ): string {
 	return substr( preg_replace( '/[^a-z0-9_-]/', '', strtolower( $subid ) ), 0, 40 );
 }
 
+/** Removes trailing spaces ('+' or %20) from query values, e.g. 'campaign_id=224+&sub_id=' -> 'campaign_id=224&sub_id='. Pure. */
+function gbg_core_trim_query_values( string $href ): string {
+	return (string) preg_replace( '/=([^&#]*?)(?:\+|%20)+(?=&|#|$)/', '=$1', $href );
+}
+
 /**
  * Walks every <a> in $html once. Returns [html, has_affiliate_links].
  * Adds sub_id to links on subid hosts that do not have one yet; never changes other links.
@@ -343,9 +348,15 @@ function gbg_core_process_links( string $html, array $settings, string $subid ):
 			$has_affiliate = true;
 		}
 		if ( $settings['subid_enabled'] && '' !== $subid && gbg_core_host_matches( $host, $settings['subid_hosts'] ) ) {
-			parse_str( $parts['query'] ?? '', $query );
+			// 0.3.65: the buy-SIM template writes 'campaign_id=224+' (a trailing space); Travelpayouts then dropped the
+			// sub_id (Yesim 19-24 Oct: 143 clicks without sub_id, 3 with). Trailing spaces in values are removed.
+			$clean = gbg_core_trim_query_values( $href );
+			parse_str( (string) wp_parse_url( $clean, PHP_URL_QUERY ), $query );
 			if ( ! isset( $query['sub_id'] ) || '' === $query['sub_id'] ) {
-				$tags->set_attribute( 'href', add_query_arg( 'sub_id', $subid, $href ) );
+				$clean = add_query_arg( 'sub_id', $subid, $clean );
+			}
+			if ( $clean !== $href ) {
+				$tags->set_attribute( 'href', $clean );
 			}
 		}
 	}
