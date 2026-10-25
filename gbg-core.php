@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.66
+ * Version: 0.3.67
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.66';
+const GBG_CORE_VERSION = '0.3.67';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -2145,6 +2145,127 @@ function gbg_core_webp_html( string $html, string $base, callable $exists ): str
 	}
 	return $html;
 }
+
+// 0.3.67 (Paul 25-10): WebP copies for old uploads Imagify does not know (sizes no longer in the attachment metadata,
+// old edited copies, files outside the media library). Written as <file>.<ext>.webp next to the original, where Imagify
+// puts its own copies, so webp_enabled serves them with no content change. Never overwrites a copy, never touches the
+// original, and keeps a copy only when it is smaller AND close to the original (PSNR on a 256px thumbnail of both).
+function gbg_core_webp_rel_ok( string $rel ): bool {
+	return (bool) preg_match( '#^\d{4}/\d{2}/[^/\\\\]+\.(?:jpe?g|png)$#i', $rel ) && ! str_contains( $rel, '..' );
+}
+
+function gbg_core_webp_load( string $file, string $mime ) {
+	$img = 'image/png' === $mime ? @imagecreatefrompng( $file ) : @imagecreatefromjpeg( $file ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+	if ( ! $img ) {
+		return null;
+	}
+	if ( 'image/png' === $mime ) {
+		imagepalettetotruecolor( $img );
+		imagealphablending( $img, false );
+		imagesavealpha( $img, true );
+	} elseif ( function_exists( 'exif_read_data' ) ) {
+		// Phone photos keep their rotation in EXIF; browsers apply it to the JPEG, so the WebP must be rotated itself.
+		$o   = (int) ( @exif_read_data( $file )['Orientation'] ?? 1 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+		$rot = array( 3 => 180, 6 => -90, 8 => 90 );
+		if ( isset( $rot[ $o ] ) ) {
+			$img = imagerotate( $img, $rot[ $o ], 0 );
+		}
+	}
+	return $img;
+}
+
+// Peak signal-to-noise ratio of two images on a 256px thumbnail (dB; higher = closer, 40+ looks identical).
+function gbg_core_webp_psnr( $a, $b ): float {
+	$w  = 256;
+	$h  = max( 1, (int) round( $w * imagesy( $a ) / max( 1, imagesx( $a ) ) ) );
+	$ta = imagescale( $a, $w, $h );
+	$tb = imagescale( $b, $w, $h );
+	$se = 0.0;
+	for ( $y = 0; $y < $h; $y++ ) {
+		for ( $x = 0; $x < $w; $x++ ) {
+			$p = imagecolorat( $ta, $x, $y );
+			$q = imagecolorat( $tb, $x, $y );
+			foreach ( array( 16, 8, 0 ) as $s ) {
+				$d   = ( ( $p >> $s ) & 255 ) - ( ( $q >> $s ) & 255 );
+				$se += $d * $d;
+			}
+		}
+	}
+	$mse = $se / ( $w * $h * 3 );
+	return $mse > 0 ? round( 10 * log10( 255 * 255 / $mse ), 1 ) : 99.0;
+}
+
+function gbg_core_webp_make( string $file, int $quality, bool $dry, float $min_psnr = 36.0 ): array {
+	$out = array( 'status' => 'error' );
+	if ( ! is_file( $file ) ) {
+		return array( 'status' => 'missing' );
+	}
+	if ( is_file( $file . '.webp' ) ) {
+		return array( 'status' => 'exists' );
+	}
+	if ( ! function_exists( 'imagewebp' ) ) {
+		return array( 'status' => 'no_webp_support' );
+	}
+	$info = @getimagesize( $file ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+	$mime = (string) ( $info['mime'] ?? '' );
+	if ( ! in_array( $mime, array( 'image/jpeg', 'image/png' ), true ) ) {
+		return array( 'status' => 'not_jpeg_png', 'mime' => $mime );
+	}
+	$bytes = (int) filesize( $file );
+	$img   = gbg_core_webp_load( $file, $mime );
+	if ( ! $img ) {
+		return array( 'status' => 'unreadable' );
+	}
+	$out = array( 'w' => imagesx( $img ), 'h' => imagesy( $img ), 'bytes' => $bytes );
+	// Try the requested quality, one step higher when the copy is not close enough; keep the first that passes.
+	foreach ( array_unique( array( $quality, min( 95, $quality + 10 ) ) ) as $q ) {
+		$tmp = $file . '.webp.tmp';
+		imagewebp( $img, $tmp, $q );
+		$size = (int) filesize( $tmp );
+		$back = @imagecreatefromwebp( $tmp ); // phpcs:ignore WordPress.PHP.NoSilencedErrors
+		$psnr = $back ? gbg_core_webp_psnr( $img, $back ) : 0.0;
+		$out  = array_merge( $out, array( 'quality' => $q, 'webp_bytes' => $size, 'psnr' => $psnr ) );
+		if ( $back && $psnr >= $min_psnr && $size < $bytes ) {
+			if ( $dry ) {
+				unlink( $tmp );
+				return array_merge( $out, array( 'status' => 'would_make' ) );
+			}
+			rename( $tmp, $file . '.webp' );
+			return array_merge( $out, array( 'status' => 'made' ) );
+		}
+		unlink( $tmp );
+		if ( $size >= $bytes ) {
+			return array_merge( $out, array( 'status' => 'larger' ) ); // a higher quality only gets bigger: keep the original
+		}
+	}
+	return array_merge( $out, array( 'status' => 'quality_too_low' ) );
+}
+
+add_action(
+	'rest_api_init',
+	static function () {
+		register_rest_route(
+			'gbg/v1',
+			'/webp-make',
+			array(
+				'methods'             => 'POST',
+				'permission_callback' => 'gbg_core_can_manage',
+				'callback'            => static function ( WP_REST_Request $request ) {
+					$files = array_slice( (array) $request->get_param( 'files' ), 0, 10 ); // small batches: the server also runs staging
+					$q     = max( 60, min( 95, (int) ( $request->get_param( 'quality' ) ?: 82 ) ) );
+					$dry   = (bool) $request->get_param( 'dry_run' );
+					$base  = wp_get_upload_dir()['basedir'];
+					$res   = array();
+					foreach ( $files as $rel ) {
+						$rel = ltrim( (string) $rel, '/' );
+						$res[ $rel ] = gbg_core_webp_rel_ok( $rel ) ? gbg_core_webp_make( $base . '/' . $rel, $q, $dry ) : array( 'status' => 'refused_path' );
+					}
+					return array( 'dry_run' => $dry, 'quality' => $q, 'results' => $res );
+				},
+			)
+		);
+	}
+);
 
 // Lazy theme images without a srcset get the attachment's srcset; sizes=auto lets the browser use the laid-out width.
 function gbg_core_img_srcset( string $html, callable $srcset_for ): string {
