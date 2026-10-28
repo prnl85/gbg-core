@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.69
+ * Version: 0.3.70
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.69';
+const GBG_CORE_VERSION = '0.3.70';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -130,6 +130,8 @@ function gbg_core_defaults(): array {
 		// 0.3.64 (Paul 24-10): the default Impreza page template shifts the page content 40px left (us_custom_b4f4ca0f);
 		// right on desktop, but on phones the text sits 8px from the left edge and 48px from the right. Fix for <= 600px.
 		'page_padding_fix'   => false,
+		// 0.3.70 (Paul 28-10): external links (and /go/ partner links) open in a new tab so visitors keep the site open.
+		'external_blank'     => true,
 	);
 }
 
@@ -144,7 +146,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'author_box_enabled', 'page_padding_fix' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'author_box_enabled', 'page_padding_fix', 'external_blank' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -3571,4 +3573,51 @@ add_action(
 			)
 		);
 	}
+);
+
+/**
+ * Adds target="_blank" and rel="noopener" to links that leave the site: other hosts and /go/ partner redirects
+ * (Paul 28-10). Keeps links that already have a target, internal links, anchors, mailto/tel and javascript. Pure.
+ */
+function gbg_core_external_blank( string $html, string $own_host ): string {
+	if ( ! str_contains( $html, '<a ' ) ) {
+		return $html;
+	}
+	$own = preg_replace( '/^www\./', '', strtolower( $own_host ) );
+	return (string) preg_replace_callback(
+		'/<a\s[^>]*>/i',
+		static function ( $m ) use ( $own ) {
+			$tag = $m[0];
+			if ( preg_match( '/\starget\s*=/i', $tag ) || ! preg_match( '/\shref\s*=\s*(["\'])(.*?)\1/i', $tag, $h ) ) {
+				return $tag;
+			}
+			$href = html_entity_decode( trim( $h[2] ), ENT_QUOTES );
+			$host = strtolower( (string) parse_url( $href, PHP_URL_HOST ) );
+			$path = (string) parse_url( $href, PHP_URL_PATH );
+			$ext  = '' !== $host && preg_replace( '/^www\./', '', $host ) !== $own && ! str_ends_with( $host, '.' . $own );
+			$go   = ( '' === $host || preg_replace( '/^www\./', '', $host ) === $own ) && (bool) preg_match( '#^(/[a-z]{2}(-[a-z]{2})?)?/go/#i', $path );
+			if ( ! ( $ext || $go ) || ! preg_match( '#^(https?:)?//|^/#i', $href ) ) {
+				return $tag;
+			}
+			if ( preg_match( '/\srel\s*=\s*(["\'])(.*?)\1/i', $tag, $r ) ) {
+				$rel = in_array( 'noopener', preg_split( '/\s+/', strtolower( $r[2] ) ), true ) ? $r[2] : trim( $r[2] . ' noopener' );
+				$tag = str_replace( $r[0], ' rel=' . $r[1] . $rel . $r[1], $tag );
+			} else {
+				$tag = substr( $tag, 0, -1 ) . ' rel="noopener">';
+			}
+			return substr( $tag, 0, -1 ) . ' target="_blank">';
+		},
+		$html
+	);
+}
+
+add_filter(
+	'the_content',
+	static function ( $content ) {
+		if ( ! is_string( $content ) || empty( gbg_core_settings()['external_blank'] ) || is_admin() || is_feed() || ( defined( 'REST_REQUEST' ) && REST_REQUEST ) ) {
+			return $content;
+		}
+		return gbg_core_external_blank( $content, (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
+	},
+	99
 );
