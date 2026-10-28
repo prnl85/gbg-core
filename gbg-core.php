@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.70
+ * Version: 0.3.71
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.70';
+const GBG_CORE_VERSION = '0.3.71';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -3620,4 +3620,21 @@ add_filter(
 		return gbg_core_external_blank( $content, (string) wp_parse_url( home_url(), PHP_URL_HOST ) );
 	},
 	99
+);
+
+// 0.3.71: links outside the post content (Impreza page blocks, comments, widgets) get the same treatment on click.
+// Theme share buttons (w-sharing-item) open their own popup and are skipped.
+add_action(
+	'wp_footer',
+	static function () {
+		if ( empty( gbg_core_settings()['external_blank'] ) || is_admin() ) {
+			return;
+		}
+		echo '<script>document.addEventListener("click",function(e){var a=e.target.closest&&e.target.closest("a[href]");if(!a||a.target||a.classList.contains("w-sharing-item"))return;'
+			. 'var u;try{u=new URL(a.href,location.href)}catch(x){return}if(!/^https?:$/.test(u.protocol))return;'
+			. 'var own=u.hostname.replace(/^www\./,"")===location.hostname.replace(/^www\./,"");'
+			. 'if(own&&!/^(\/[a-z]{2}(-[a-z]{2})?)?\/go\//i.test(u.pathname))return;'
+			. 'a.target="_blank";if(!/\bnoopener\b/.test(a.rel))a.rel=(a.rel+" noopener").trim()},true);</script>' . "\n";
+	},
+	50
 );
