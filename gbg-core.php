@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.71
+ * Version: 0.3.72
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.71';
+const GBG_CORE_VERSION = '0.3.72';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -121,6 +121,10 @@ function gbg_core_defaults(): array {
 		'go_rel'             => false,
 		'go_robots'          => false,
 		'go_gate'            => false,
+		// 0.3.72 (Paul 29-10: ~1,700 bot hits a day passed as 'noscript' because they send our own Referer): also send a
+		// /go/ hit WITH our Referer but without the page cookie to the forwarding page. Readers' browsers go on at once by
+		// script (translated pages, in-app browsers) or by the button (no JavaScript); crawlers stop there.
+		'go_gate_noscript'   => false,
 		// 0.3.59 (Paul 24-10): author box under every post: photo, 2-3 sentences, links, last updated date. Facts only from
 		// the About page; the text is a setting so Paul can change it without a release.
 		'author_box_enabled' => false,
@@ -146,7 +150,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'author_box_enabled', 'page_padding_fix', 'external_blank' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'go_gate_noscript', 'author_box_enabled', 'page_padding_fix', 'external_blank' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -2560,8 +2564,11 @@ add_action(
 		header( 'Cache-Control: no-store, private' );
 		header( 'X-GBG-Go: 1' );
 		$own = (string) wp_parse_url( home_url(), PHP_URL_HOST );
-		if ( gbg_core_settings()['go_gate'] && gbg_core_go_gated( $_COOKIE, $_GET, $_POST, (string) ( $_SERVER['HTTP_REFERER'] ?? '' ), $own ) ) { // phpcs:ignore WordPress.Security
-			gbg_core_go_gate_page();
+		$ref = (string) ( $_SERVER['HTTP_REFERER'] ?? '' ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
+		$set = gbg_core_settings();
+		if ( $set['go_gate'] && gbg_core_go_gated( $_COOKIE, $_GET, $_POST, $ref, $own, ! empty( $set['go_gate_noscript'] ) ) ) { // phpcs:ignore WordPress.Security
+			// 'n' marks a reader who came from one of our pages, so the hit after the gate still counts as 'noscript'.
+			gbg_core_go_gate_page( '' !== $own && strtolower( (string) wp_parse_url( $ref, PHP_URL_HOST ) ) === strtolower( $own ) ? 'n' : '1' );
 		}
 		gbg_core_go_track( $target );
 		wp_redirect( $target, 302, 'GoBackpackGo' ); // phpcs:ignore WordPress.Security.SafeRedirect -- targets are allowlisted
@@ -2777,34 +2784,39 @@ function gbg_core_mp_send( string $name, array $params ): bool {
 
 /**
  * True when a /go/ hit must pass the forwarding page first: no click cookie from our page script, not the page's own
- * second try (?gbgh=1, also through the translation proxy, which may not pass cookies) or its button (POST gbg_go), and
- * not coming from one of our own pages. Pure.
+ * second try (?gbgh=1|n, also through the translation proxy, which may not pass cookies) or its button (POST gbg_go), and
+ * not coming from one of our own pages, unless $own_too (0.3.72: bots send our own Referer as well). Pure.
  */
-function gbg_core_go_gated( array $cookie, array $get, array $post, string $referer, string $own_host ): bool {
-	if ( isset( $cookie['gbg_pl'] ) || '1' === (string) ( $get['gbgh'] ?? '' ) || '1' === (string) ( $post['gbg_go'] ?? '' ) ) {
+function gbg_core_go_gated( array $cookie, array $get, array $post, string $referer, string $own_host, bool $own_too = false ): bool {
+	if ( isset( $cookie['gbg_pl'] ) || in_array( (string) ( $get['gbgh'] ?? '' ), array( '1', 'n' ), true ) || in_array( (string) ( $post['gbg_go'] ?? '' ), array( '1', 'n' ), true ) ) {
 		return false;
 	}
-	return '' === $own_host || strtolower( (string) wp_parse_url( $referer, PHP_URL_HOST ) ) !== strtolower( $own_host );
+	return $own_too || '' === $own_host || strtolower( (string) wp_parse_url( $referer, PHP_URL_HOST ) ) !== strtolower( $own_host );
 }
 
 /** Placement of a /go/ hit without the page's click cookie: direct (via the forwarding page), noscript (from our page), nojs. Pure. */
 function gbg_core_go_nocookie_placement( array $get, array $post, string $referer, string $own_host ): string {
+	if ( 'n' === (string) ( $get['gbgh'] ?? '' ) || 'n' === (string) ( $post['gbg_go'] ?? '' ) ) {
+		return 'noscript';  // came from our page, passed the gate (0.3.72)
+	}
 	if ( '1' === (string) ( $get['gbgh'] ?? '' ) || '1' === (string) ( $post['gbg_go'] ?? '' ) ) {
 		return 'direct';
 	}
 	return '' !== $own_host && strtolower( (string) wp_parse_url( $referer, PHP_URL_HOST ) ) === strtolower( $own_host ) ? 'noscript' : 'nojs';
 }
 
-/** The forwarding page: readers' browsers go on at once by script; crawlers that do not run scripts stop here. */
-function gbg_core_go_gate_page(): void {
+/** The forwarding page: readers' browsers go on at once by script; crawlers that do not run scripts stop here.
+ * $mark is '1' (came from elsewhere) or 'n' (came from our page without the click cookie, 0.3.72). */
+function gbg_core_go_gate_page( string $mark = '1' ): void {
+	$mark = 'n' === $mark ? 'n' : '1';
 	$slug = preg_match( '#/go/([a-z0-9-]+)#', strtolower( (string) wp_parse_url( $_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH ) ), $m ) ? $m[1] : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput
 	gbg_core_go_count( $slug, 'nojs', (string) ( $_GET['s'] ?? '' ) ); // phpcs:ignore WordPress.Security
 	status_header( 200 );
 	header( 'Content-Type: text/html; charset=utf-8' );
 	echo '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="robots" content="noindex, nofollow"><meta name="viewport" content="width=device-width,initial-scale=1">'
 		. '<title>One moment</title><style>body{font:16px/1.5 system-ui,sans-serif;max-width:32rem;margin:15vh auto;padding:0 16px;color:#222}button{font:inherit;padding:.6em 1.2em;border:0;border-radius:6px;background:#8fc646;color:#fff;cursor:pointer}</style>'
-		. '<script>(function(){var u=new URL(location.href);u.searchParams.set("gbgh","1");location.replace(u.toString())})();</script></head><body>'
-		. '<p>Taking you to our partner&hellip;</p><form method="post"><input type="hidden" name="gbg_go" value="1"><button type="submit">Continue</button></form></body></html>';
+		. '<script>(function(){var u=new URL(location.href);u.searchParams.set("gbgh","' . $mark . '");location.replace(u.toString())})();</script></head><body>'
+		. '<p>Taking you to our partner&hellip;</p><form method="post"><input type="hidden" name="gbg_go" value="' . $mark . '"><button type="submit">Continue</button></form></body></html>';
 	exit;
 }
 
