@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.72
+ * Version: 0.3.73
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.72';
+const GBG_CORE_VERSION = '0.3.73';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -136,6 +136,9 @@ function gbg_core_defaults(): array {
 		'page_padding_fix'   => false,
 		// 0.3.70 (Paul 28-10): external links (and /go/ partner links) open in a new tab so visitors keep the site open.
 		'external_blank'     => true,
+		// 0.3.73 (Paul 6-11): GA4 only counts real visitors: off on every host except the live site (staging), and off
+		// for logged-in editors on live too, so Paul's own visits stay out of the reports.
+		'ga_exclude_own'     => true,
 	);
 }
 
@@ -150,7 +153,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'go_gate_noscript', 'author_box_enabled', 'page_padding_fix', 'external_blank' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'go_gate_noscript', 'author_box_enabled', 'page_padding_fix', 'external_blank', 'ga_exclude_own' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -3649,4 +3652,38 @@ add_action(
 			. 'a.target="_blank";if(!/\bnoopener\b/.test(a.rel))a.rel=(a.rel+" noopener").trim()},true);</script>' . "\n";
 	},
 	50
+);
+
+/* -------------------------------------------------------------------------
+ * 0.3.73 (Paul 6-11): keep own traffic out of GA4. On any host but the live site (staging still carries the old GTM
+ * snippet in its theme options) and for logged-in editors, window['ga-disable-<G-ID>'] = true is set before any Google
+ * tag runs; gtag, GTM's Google tag and Complianz' GA4 all honour it. Nothing changes for visitors on live.
+ * ---------------------------------------------------------------------- */
+
+/** Whether GA4 must stay silent for this request. Pure. */
+function gbg_core_ga_excluded( bool $enabled, string $host, bool $editor ): bool {
+	if ( ! $enabled ) {
+		return false;
+	}
+	return GBG_CORE_LIVE_HOST !== strtolower( preg_replace( '/^www\./i', '', $host ) ) || $editor;
+}
+
+/** The inline script for the measurement id, or '' when the id is missing or malformed. Pure. */
+function gbg_core_ga_disable_script( string $measurement_id ): string {
+	if ( ! preg_match( '/^G-[A-Z0-9]{4,15}$/', $measurement_id ) ) {
+		return '';
+	}
+	return '<script id="gbg-ga-off">window["ga-disable-' . $measurement_id . '"]=true;</script>' . "\n";
+}
+
+add_action(
+	'wp_head',
+	static function () {
+		$s = gbg_core_settings();
+		if ( is_admin() || ! gbg_core_ga_excluded( ! empty( $s['ga_exclude_own'] ), (string) wp_parse_url( home_url(), PHP_URL_HOST ), current_user_can( 'edit_posts' ) ) ) {
+			return;
+		}
+		echo gbg_core_ga_disable_script( (string) $s['ga4_measurement_id'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- id validated by pattern
+	},
+	-100
 );
