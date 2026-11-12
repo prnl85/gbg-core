@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.74
+ * Version: 0.3.75
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.74';
+const GBG_CORE_VERSION = '0.3.75';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -187,6 +187,12 @@ function gbg_core_sanitize( array $input ): array {
 		foreach ( array( 'image', 'url' ) as $k ) {
 			if ( isset( $input['entity'][ $k ] ) && str_starts_with( (string) $input['entity'][ $k ], 'https://' ) ) {
 				$e[ $k ] = esc_url_raw( (string) $input['entity'][ $k ] );
+			}
+		}
+		foreach ( array( 'same_as', 'knows_about', 'knows_language' ) as $k ) {
+			if ( isset( $input['entity'][ $k ] ) ) {
+				$list    = array_slice( array_map( 'sanitize_text_field', (array) $input['entity'][ $k ] ), 0, 30 );
+				$e[ $k ] = 'same_as' === $k ? array_values( array_filter( array_map( 'esc_url_raw', $list ), static fn( $u ) => str_starts_with( $u, 'https://' ) ) ) : array_values( array_filter( $list ) );
 			}
 		}
 		$clean['entity'] = $e;
@@ -3748,7 +3754,12 @@ function gbg_core_entity_graph( array $graph, array $e, string $home, bool $is_a
 				$n['homeLocation'] = array( '@type' => 'Place', 'name' => $e['home'] );
 			}
 			$n['worksFor'] = array( '@id' => $home . '#organization' );
-			$n['sameAs']   = array_values( array_filter( (array) ( $n['sameAs'] ?? array() ), static fn( $u ) => rtrim( (string) $u, '/' ) !== rtrim( $e['url'], '/' ) ) );
+			$n['sameAs']   = array_values( array_unique( array_filter( array_merge( (array) ( $n['sameAs'] ?? array() ), (array) ( $e['same_as'] ?? array() ) ), static fn( $u ) => rtrim( (string) $u, '/' ) !== rtrim( $e['url'], '/' ) ) ) );
+			foreach ( array( 'knows_about' => 'knowsAbout', 'knows_language' => 'knowsLanguage' ) as $k => $f ) {
+				if ( ! empty( $e[ $k ] ) ) {
+					$n[ $f ] = array_values( array_unique( array_merge( (array) ( $n[ $f ] ?? array() ), $e[ $k ] ) ) );
+				}
+			}
 			$graph[ $i ]   = $n;
 		}
 	}
@@ -3764,6 +3775,11 @@ function gbg_core_entity_graph( array $graph, array $e, string $home, bool $is_a
 		}
 		if ( ! empty( $e['home'] ) ) {
 			$p['homeLocation'] = array( '@type' => 'Place', 'name' => $e['home'] );
+		}
+		foreach ( array( 'same_as' => 'sameAs', 'knows_about' => 'knowsAbout', 'knows_language' => 'knowsLanguage' ) as $k => $f ) {
+			if ( ! empty( $e[ $k ] ) ) {
+				$p[ $f ] = $e[ $k ];
+			}
 		}
 		$graph[] = $p;
 		$seen    = true;
