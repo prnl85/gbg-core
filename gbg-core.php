@@ -2,7 +2,7 @@
 /**
  * Plugin Name: !GoBackpackGo Core
  * Description: Small site helpers for GoBackpackGo: noindex for an approved list of posts, an automatic affiliate disclosure, Travelpayouts SubIDs and Yoast fields of pages in the REST API, an optional lock on the public MCP endpoint, optional Redirection access for Claude's account, updates through the normal WordPress Updates screen, a security health report, optional hardening switches, lightweight A/B tests and a growth module that collects tagged email sign-ups for lead magnets. Every output feature is off until switched on.
- * Version: 0.3.73
+ * Version: 0.3.74
  * Requires at least: 6.5
  * Requires PHP: 8.0
  * Author: GoBackpackGo
@@ -15,7 +15,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-const GBG_CORE_VERSION = '0.3.73';
+const GBG_CORE_VERSION = '0.3.74';
 const GBG_CORE_OPTION  = 'gbg_core_settings';
 
 // GTranslate builds /ar/, /he/, /fa/... by fetching the English page with an X-GT-Lang header; the theme then renders
@@ -139,6 +139,9 @@ function gbg_core_defaults(): array {
 		// 0.3.73 (Paul 6-11): GA4 only counts real visitors: off on every host except the live site (staging), and off
 		// for logged-in editors on live too, so Paul's own visits stay out of the reports.
 		'ga_exclude_own'     => true,
+		// 0.3.74 (Paul 12-11, AI SEO author entity): one stable Person for every article, the About page and the Organization.
+		'entity_enabled'     => false,
+		'entity'             => array(),
 	);
 }
 
@@ -153,7 +156,7 @@ function gbg_core_settings( bool $refresh = false ): array {
 
 function gbg_core_sanitize( array $input ): array {
 	$clean = array();
-	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'go_gate_noscript', 'author_box_enabled', 'page_padding_fix', 'external_blank', 'ga_exclude_own' ) as $key ) {
+	foreach ( array( 'noindex_enabled', 'disclosure_enabled', 'subid_enabled', 'subid_lang', 'subid_whole_page', 'mcp_lock_enabled', 'redirection_access', 'xmlrpc_off', 'author_scan_block', 'users_api_private', 'hide_generator', 'leads_enabled', 'pin_enabled', 'share_enabled', 'lightbox_fix', 'track_enabled', 'webp_enabled', 'srcset_enabled', 'local_fonts', 'light_icons', 'baidu_limit', 'esim_faq_fix', 'nearby_enabled', 'go_rel', 'go_robots', 'go_gate', 'go_gate_noscript', 'author_box_enabled', 'page_padding_fix', 'external_blank', 'ga_exclude_own', 'entity_enabled' ) as $key ) {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = (bool) $input[ $key ];
 		}
@@ -173,6 +176,20 @@ function gbg_core_sanitize( array $input ): array {
 		if ( array_key_exists( $key, $input ) ) {
 			$clean[ $key ] = sanitize_text_field( (string) $input[ $key ] );
 		}
+	}
+	if ( array_key_exists( 'entity', $input ) && is_array( $input['entity'] ) ) {
+		$e = array();
+		foreach ( array( 'name', 'given_name', 'family_name', 'job_title', 'description', 'home', 'org_name' ) as $k ) {
+			if ( isset( $input['entity'][ $k ] ) ) {
+				$e[ $k ] = sanitize_text_field( (string) $input['entity'][ $k ] );
+			}
+		}
+		foreach ( array( 'image', 'url' ) as $k ) {
+			if ( isset( $input['entity'][ $k ] ) && str_starts_with( (string) $input['entity'][ $k ], 'https://' ) ) {
+				$e[ $k ] = esc_url_raw( (string) $input['entity'][ $k ] );
+			}
+		}
+		$clean['entity'] = $e;
 	}
 	if ( array_key_exists( 'person_same_as', $input ) ) {
 		$clean['person_same_as'] = array_values( array_filter( array_map( 'esc_url_raw', (array) $input['person_same_as'] ), static fn( $u ) => str_starts_with( $u, 'https://' ) ) );
@@ -3686,4 +3703,118 @@ add_action(
 		echo gbg_core_ga_disable_script( (string) $s['ga4_measurement_id'] ); // phpcs:ignore WordPress.Security.EscapeOutput -- id validated by pattern
 	},
 	-100
+);
+
+/* -------------------------------------------------------------------------
+ * 0.3.74 (Paul 12-11, AI SEO author entity checklist): Yoast names the author 'Paul' with a hashed @id and a Gravatar,
+ * and the About page carries no Person at all, so AI systems cannot tie the articles to 'Paul Ram'. With entity_enabled
+ * every Person piece Yoast outputs gets one stable @id (<About URL>#person), the full name, a real photo and the bio;
+ * every reference to the old id (Article.author, ...) follows; the Organization gets one name and founder -> Person;
+ * the About page becomes a ProfilePage whose mainEntity is that Person (added when Yoast left it out).
+ * Settings: POST /gbg/v1/settings {"entity_enabled": true, "entity": {"name", "given_name", "family_name", "job_title",
+ * "description", "home", "image", "url" (About page), "org_name"}}.
+ * ---------------------------------------------------------------------- */
+
+/** Rewrite a Yoast schema graph for the author entity. Pure. */
+function gbg_core_entity_graph( array $graph, array $e, string $home, bool $is_about ): array {
+	if ( empty( $e['name'] ) || empty( $e['url'] ) ) {
+		return $graph;
+	}
+	$pid  = rtrim( $e['url'], '#' ) . '#person';
+	$old  = array();
+	$seen = false;
+	$home = rtrim( $home, '/' ) . '/';
+	foreach ( $graph as $i => $n ) {
+		$types = (array) ( $n['@type'] ?? array() );
+		if ( in_array( 'Person', $types, true ) && isset( $n['@id'] ) && str_starts_with( (string) $n['@id'], $home . '#/schema/person/' ) ) {
+			$old[] = $n['@id'];
+			if ( $seen ) {
+				unset( $graph[ $i ] );
+				continue;
+			}
+			$seen = true;
+			$n['@id']  = $pid;
+			$n['name'] = $e['name'];
+			foreach ( array( 'given_name' => 'givenName', 'family_name' => 'familyName', 'job_title' => 'jobTitle', 'description' => 'description' ) as $k => $f ) {
+				if ( ! empty( $e[ $k ] ) ) {
+					$n[ $f ] = $e[ $k ];
+				}
+			}
+			$n['url'] = $e['url'];
+			if ( ! empty( $e['image'] ) ) {
+				$n['image'] = array( '@type' => 'ImageObject', '@id' => $pid . '-image', 'url' => $e['image'], 'contentUrl' => $e['image'], 'caption' => $e['name'] );
+			}
+			if ( ! empty( $e['home'] ) ) {
+				$n['homeLocation'] = array( '@type' => 'Place', 'name' => $e['home'] );
+			}
+			$n['worksFor'] = array( '@id' => $home . '#organization' );
+			$n['sameAs']   = array_values( array_filter( (array) ( $n['sameAs'] ?? array() ), static fn( $u ) => rtrim( (string) $u, '/' ) !== rtrim( $e['url'], '/' ) ) );
+			$graph[ $i ]   = $n;
+		}
+	}
+	if ( ! $seen && $is_about ) {
+		$p = array( '@type' => 'Person', '@id' => $pid, 'name' => $e['name'], 'url' => $e['url'], 'worksFor' => array( '@id' => $home . '#organization' ) );
+		foreach ( array( 'given_name' => 'givenName', 'family_name' => 'familyName', 'job_title' => 'jobTitle', 'description' => 'description' ) as $k => $f ) {
+			if ( ! empty( $e[ $k ] ) ) {
+				$p[ $f ] = $e[ $k ];
+			}
+		}
+		if ( ! empty( $e['image'] ) ) {
+			$p['image'] = array( '@type' => 'ImageObject', '@id' => $pid . '-image', 'url' => $e['image'], 'contentUrl' => $e['image'], 'caption' => $e['name'] );
+		}
+		if ( ! empty( $e['home'] ) ) {
+			$p['homeLocation'] = array( '@type' => 'Place', 'name' => $e['home'] );
+		}
+		$graph[] = $p;
+		$seen    = true;
+	}
+	$name = $e['name'];
+	$fix  = static function ( $v ) use ( &$fix, $old, $pid, $name ) {
+		if ( is_array( $v ) ) {
+			if ( isset( $v['@id'] ) && in_array( $v['@id'], $old, true ) ) {
+				return isset( $v['name'] ) ? array( 'name' => $name, '@id' => $pid ) : array( '@id' => $pid );
+			}
+			foreach ( $v as $k => $x ) {
+				$v[ $k ] = $fix( $x );
+			}
+		}
+		return $v;
+	};
+	foreach ( $graph as $i => $n ) {
+		$types = (array) ( $n['@type'] ?? array() );
+		if ( ! in_array( 'Person', $types, true ) ) {
+			$n = $fix( $n );
+		}
+		if ( in_array( 'Organization', $types, true ) && ( $n['@id'] ?? '' ) === $home . '#organization' ) {
+			if ( ! empty( $e['org_name'] ) ) {
+				$n['name'] = $e['org_name'];
+			}
+			if ( $seen ) {
+				$n['founder'] = array( '@id' => $pid );
+			}
+		}
+		if ( in_array( 'WebSite', $types, true ) && ! empty( $e['org_name'] ) ) {
+			$n['name'] = $e['org_name'];
+		}
+		if ( $is_about && in_array( 'WebPage', $types, true ) && rtrim( (string) ( $n['@id'] ?? '' ), '/' ) === rtrim( $e['url'], '/' ) ) {
+			$n['@type']      = array( 'WebPage', 'ProfilePage' );
+			$n['mainEntity'] = array( '@id' => $pid );
+		}
+		$graph[ $i ] = $n;
+	}
+	return array_values( $graph );
+}
+
+add_filter(
+	'wpseo_schema_graph',
+	static function ( $graph ) {
+		$s = gbg_core_settings();
+		if ( empty( $s['entity_enabled'] ) || ! is_array( $graph ) ) {
+			return $graph;
+		}
+		$e        = (array) $s['entity'];
+		$is_about = ! empty( $e['url'] ) && is_singular() && rtrim( (string) get_permalink(), '/' ) === rtrim( $e['url'], '/' );
+		return gbg_core_entity_graph( $graph, $e, home_url( '/' ), $is_about );
+	},
+	20
 );
